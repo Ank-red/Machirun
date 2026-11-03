@@ -9,6 +9,11 @@
   let route = $state<string>("鴨飼経由");
   let direction = $state<string>("下り");
 
+  // 運行モードの切り替え ("1-step" または "3-step")
+  let operationMode = $state<"1-step" | "3-step">("1-step");
+  // 3段階モード時の現在のステップ (0: ドア開け待ち, 1: 案内音声待ち, 2: ドア閉め・次へ待ち)
+  let currentStep = $state<number>(0);
+
   let selectedTripIdx = $state<number>(0);
   let currentStopIdx = $state<number>(0);
   let now = $state<Date>(new Date());
@@ -37,12 +42,15 @@
   let currentTrip = $derived(activeTrips[selectedTripIdx] ?? null);
   let currentStop = $derived(currentTrip?.stops[currentStopIdx] ?? null);
 
-  // 便やルートが変わったら選択インデックスをリセット
+  // ルートや方向が変更されたときだけ、便とステップをリセットする
+  let previousRouteDir = $state(`${route}_${direction}`);
   $effect(() => {
-    // 依存している状態が変わったときにインデックスを保護
-    if (selectedTripIdx >= activeTrips.length) {
+    const currentRouteDir = `${route}_${direction}`;
+    if (previousRouteDir !== currentRouteDir) {
+      previousRouteDir = currentRouteDir;
       selectedTripIdx = 0;
       currentStopIdx = 0;
+      currentStep = 0;
     }
   });
 
@@ -53,15 +61,71 @@
     return () => clearInterval(timer);
   });
 
-  function nextStop() {
-    if (currentTrip && currentStopIdx < currentTrip.stops.length - 1) {
-      currentStopIdx++;
+  // メインボタンが押されたときの処理
+  function handleMainAction() {
+    if (!currentTrip) return;
+
+    if (operationMode === "1-step") {
+      // 1段階式：即座に次の停留所へ
+      if (currentStopIdx < currentTrip.stops.length - 1) {
+        currentStopIdx++;
+      }
+    } else {
+      // 3段階式：ステップを進める
+      if (currentStep === 0) {
+        // 1段階目：ドアを開ける（音声トリップ等）
+        currentStep = 1;
+      } else if (currentStep === 1) {
+        // 2段階目：案内を流す
+        currentStep = 2;
+      } else if (currentStep === 2) {
+        // 3段階目：ドアを閉めて次へ
+        if (currentStopIdx < currentTrip.stops.length - 1) {
+          currentStopIdx++;
+        }
+        currentStep = 0; // 次の停留所の1段階目に戻る
+      }
     }
   }
 
   function prevStop() {
-    if (currentStopIdx > 0) currentStopIdx--;
+    if (currentStopIdx > 0) {
+      currentStopIdx--;
+      currentStep = 0;
+    }
   }
+
+  // キーボードショートカットの登録
+  onMount(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 入力フォームやセレクトボックスにフォーカスがあるときは誤動作を防ぐため除外
+      if (
+        ["INPUT", "SELECT", "TEXTAREA"].includes(
+          (e.target as HTMLElement).tagName,
+        )
+      ) {
+        return;
+      }
+
+      if (e.code === "ArrowRight") {
+        e.preventDefault(); // ページのスクロールなどを防ぐ
+        handleMainAction();
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        prevStop();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    const timer = setInterval(() => {
+      now = new Date();
+    }, 1000);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      clearInterval(timer);
+    };
+  });
 </script>
 
 <main class="container">
@@ -75,6 +139,11 @@
       <select bind:value={direction}>
         <option value="下り">下り (往路)</option>
         <option value="上り">上り (復路)</option>
+      </select>
+      <!-- 1段階・3段階の切り替えトグル -->
+      <select bind:value={operationMode}>
+        <option value="1-step">1段階式 (一発送り)</option>
+        <option value="3-step">3段階式 (開閉音声式)</option>
       </select>
     </div>
 
@@ -103,6 +172,14 @@
           >NEXT ({currentStopIdx + 1} / {currentTrip.stops.length})</span
         >
         <h1 class="stop-name">{currentStop.name}</h1>
+        {#if operationMode === "3-step"}
+          <span class="step-indicator">
+            {#if currentStep === 0}走行中
+            {:else if currentStep === 1}停車中
+            {:else if currentStep === 2}発車待ち
+            {/if}
+          </span>
+        {/if}
       </div>
 
       <div class="times">
@@ -121,15 +198,27 @@
       </div>
 
       <div class="controls">
-        <button onclick={prevStop} disabled={currentStopIdx === 0}
-          >◀ 前の停留所</button
+        <button
+          class="sub"
+          onclick={prevStop}
+          disabled={currentStopIdx === 0 && currentStep === 0}>◀ 前へ</button
         >
+
         <button
           class="primary"
-          onclick={nextStop}
-          disabled={currentStopIdx >= currentTrip.stops.length - 1}
+          onclick={handleMainAction}
+          disabled={currentStopIdx >= currentTrip.stops.length - 1 &&
+            currentStep === 2}
         >
-          次の停留所へ進む ▶
+          {#if operationMode === "1-step"}
+            通過 ▶
+          {:else if currentStep === 0}
+            到着 ▶
+          {:else if currentStep === 1}
+            ドア閉め ▶
+          {:else}
+            発車 ▶
+          {/if}
         </button>
       </div>
     </section>
@@ -158,6 +247,7 @@
     background: #1e293b;
     padding: 0.75rem 1rem;
     border-radius: 8px;
+    flex-wrap: wrap;
   }
   .brand {
     font-weight: bold;
@@ -194,9 +284,16 @@
     font-size: 0.9rem;
     font-weight: bold;
   }
+  .step-indicator {
+    display: block;
+    margin-top: 0.5rem;
+    font-size: 1rem;
+    color: #f59e0b;
+    font-weight: bold;
+  }
   .stop-name {
     font-size: 3rem;
-    margin: 1rem 0;
+    margin: 0.5rem 0;
   }
   .times {
     display: flex;
@@ -225,7 +322,6 @@
     margin-top: 1.5rem;
   }
   button {
-    flex: 1;
     padding: 1rem;
     font-size: 1.25rem;
     font-weight: bold;
@@ -235,9 +331,15 @@
     color: white;
     cursor: pointer;
   }
+  button.sub {
+    flex: 1;
+  }
   button.primary {
-    flex: 2;
+    flex: 3;
     background: #0284c7;
+  }
+  button.primary:hover {
+    background: #0284c7dd;
   }
   button:disabled {
     opacity: 0.4;
