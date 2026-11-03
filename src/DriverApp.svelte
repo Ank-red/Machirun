@@ -3,8 +3,10 @@
   import { parseOptDiaCsv, getTodayTrips, type BusTrip } from "./lib/timetable";
 
   // CSVファイルを個別に明示インポート（パスのトラブルを防ぐ一番確実な方法）
-  import csvKamoDaikyu from "./data/鴨飼経由_下り.csv?raw";
-  import csvKamoUekyu from "./data/鴨飼経由_上り.csv?raw";
+  import csvKamoKudari from "./data/鴨飼経由_下り.csv?raw";
+  import csvKamoNobori from "./data/鴨飼経由_上り.csv?raw";
+  import csvNokoKudari from "./data/鋸倉経由_下り.csv?raw";
+  import csvNokoNobori from "./data/鋸倉経由_上り.csv?raw";
 
   let route = $state<string>("鴨飼経由");
   let direction = $state<string>("下り");
@@ -20,8 +22,10 @@
 
   // 選択肢に応じたCSVテキストを返すマップ
   const csvMap: Record<string, string> = {
-    鴨飼経由_下り: csvKamoDaikyu,
-    鴨飼経由_上り: csvKamoUekyu,
+    鴨飼経由_下り: csvKamoKudari,
+    鴨飼経由_上り: csvKamoNobori,
+    鋸倉経由_下り: csvNokoKudari,
+    鋸倉経由_上り: csvNokoNobori,
   };
 
   // 現在選択されているルート・方向のCSVをパース
@@ -135,6 +139,7 @@
     <div class="selectors">
       <select bind:value={route}>
         <option value="鴨飼経由">鴨飼経由</option>
+        <option value="鋸倉経由">鋸倉経由</option>
       </select>
       <select bind:value={direction}>
         <option value="下り">下り (往路)</option>
