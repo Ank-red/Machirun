@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { parseOptDiaCsv, getTodayTrips, type BusTrip } from "./lib/timetable";
+  import { listen } from "@tauri-apps/api/event";
 
   // CSVファイルを個別に明示インポート（パスのトラブルを防ぐ一番確実な方法）
   import csvKamoKudari from "./data/鴨飼経由_下り.csv?raw";
@@ -58,13 +59,6 @@
     }
   });
 
-  onMount(() => {
-    const timer = setInterval(() => {
-      now = new Date();
-    }, 1000);
-    return () => clearInterval(timer);
-  });
-
   // メインボタンが押されたときの処理
   function handleMainAction() {
     if (!currentTrip) return;
@@ -99,10 +93,18 @@
     }
   }
 
+  // Tauri環境かどうかを判定する用
+  const isTauri = "__TAURI_INTERNALS__" in window;
+
   // キーボードショートカットの登録
   onMount(() => {
+    // 1. 時計のタイマー
+    const timer = setInterval(() => {
+      now = new Date();
+    }, 1000);
+
+    // 2. ブラウザ用の通常ショートカット関数
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 入力フォームやセレクトボックスにフォーカスがあるときは誤動作を防ぐため除外
       if (
         ["INPUT", "SELECT", "TEXTAREA"].includes(
           (e.target as HTMLElement).tagName,
@@ -110,9 +112,8 @@
       ) {
         return;
       }
-
       if (e.code === "ArrowRight") {
-        e.preventDefault(); // ページのスクロールなどを防ぐ
+        e.preventDefault();
         handleMainAction();
       } else if (e.code === "ArrowLeft") {
         e.preventDefault();
@@ -120,15 +121,45 @@
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    const timer = setInterval(() => {
-      now = new Date();
-    }, 1000);
+    let unlisten: (() => void) | null = null;
+
+    if (isTauri) {
+      // パススルー方式：SoundPadやVRChatのキー操作を一切邪魔せずに検知
+      listen<string>("global-key", (event) => {
+        if (event.payload === "ArrowRight") {
+          handleMainAction();
+        } else if (event.payload === "ArrowLeft") {
+          prevStop();
+        }
+      }).then((fn) => {
+        unlisten = fn;
+      });
+    } else {
+      window.addEventListener("keydown", handleKeyDown);
+    }
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
       clearInterval(timer);
+      if (unlisten) unlisten();
+      window.removeEventListener("keydown", handleKeyDown);
     };
+  });
+
+  // ダウンロードURL
+  let rpmUrl = $state("#");
+  let winUrl = $state("#");
+
+  onMount(async () => {
+    const res = await fetch(
+      "https://api.github.com/repos/Ank-red/Machirun/releases/latest",
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const asset of data.assets) {
+      if (asset.name.endsWith("-setup.exe"))
+        winUrl = asset.browser_download_url;
+      if (asset.name.endsWith(".rpm")) rpmUrl = asset.browser_download_url;
+    }
   });
 </script>
 
@@ -230,6 +261,14 @@
   {:else}
     <p class="empty">本日の運行便はありません</p>
   {/if}
+
+  {#if !isTauri}
+    <section class="monitor">
+      <p>デスクトップ版のダウンロードはこちら</p>
+      <a class="sub" href={rpmUrl}>Fedora Linux向け</a><br />
+      <a class="sub" href={winUrl}>Windows向け</a>
+    </section>
+  {/if}
 </main>
 
 <style>
@@ -326,7 +365,10 @@
     gap: 1rem;
     margin-top: 1.5rem;
   }
+  a,
   button {
+    display: block;
+    text-decoration: none;
     padding: 1rem;
     font-size: 1.25rem;
     font-weight: bold;
@@ -336,6 +378,7 @@
     color: white;
     cursor: pointer;
   }
+  a.sub,
   button.sub {
     flex: 1;
   }

@@ -33,6 +33,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         driver: resolve(import.meta.dirname, 'driver.html'),
+        desktop: resolve(import.meta.dirname, 'desktop.html'),
         // passenger: resolve(import.meta.dirname, 'index.html'),
       }
     }

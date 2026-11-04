@@ -1,0 +1,37 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "machirun",
+  "version": "0.0.1",
+  "identifier": "city.machibayashi.machirun",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173/desktop",
+    "beforeDevCommand": "bun dev",
+    "beforeBuildCommand": "bun run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Machirun Driver",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [ "nsis", "rpm", "appimage" ],
+    "icon": [
+      "../public/icon.svg",
+      "../public/favicon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

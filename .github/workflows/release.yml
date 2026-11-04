@@ -1,0 +1,64 @@
+name: Build Desktop App
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "app-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "windows-latest"
+            args: "--target x86_64-pc-windows-msvc"
+          - platform: "ubuntu-22.04"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies (for Tauri & device_query)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libx11-dev \
+            rpm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Build and Release with Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: app-v__VERSION__
+          releaseName: "Machirun Desktop v__VERSION__"
+          releaseBody: "Windows (.exe) および Fedora Linux (.rpm / .AppImage) 向けのビルドです。"
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

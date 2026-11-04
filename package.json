@@ -1,7 +1,7 @@
 {
   "name": "machirun",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
+    "@tauri-apps/cli": "^2.12.4",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.19.2",
     "svelte": "^5.57.2",
@@ -19,5 +20,8 @@
     "vite": "^8.3.5",
     "vite-plugin-pwa": "^2.0.0",
     "wrangler": "^4.156.2"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-global-shortcut": "~2"
   }
 }
