@@ -1,0 +1,7 @@
+[Desktop Entry]
+Categories=Utility;
+Exec=machirun
+Icon=machirun
+Name=Machirun Driver
+Terminal=false
+Type=Application

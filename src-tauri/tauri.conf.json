@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Machirun 車載器",
+  "productName": "Machirun Driver",
+  "mainBinaryName": "machirun",
   "version": "0.0.5",
   "identifier": "city.machibayashi.machirun",
   "build": {
@@ -39,6 +40,22 @@
         "installMode": "currentUser",
         "languages": [ "Japanese" ],
         "installerHooks": "./hooks.nsh"
+      }
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": { }
+      },
+      "deb": {
+        "files": { },
+        "desktopTemplate": "linux/machirun.desktop"
+      },
+      "rpm": {
+        "epoch": 0,
+        "files": { },
+        "release": "1",
+        "desktopTemplate": "linux/machirun.desktop"
       }
     },
     "android": {
