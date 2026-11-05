@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "Machirun 車載器",
+        "title": "Machirun Driver",
         "width": 1280,
         "height": 720,
         "resizable": true,
