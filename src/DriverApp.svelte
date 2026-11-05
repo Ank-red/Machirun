@@ -162,7 +162,8 @@
         winUrl = asset.browser_download_url;
       if (asset.name.endsWith(".rpm")) rpmUrl = asset.browser_download_url;
       if (asset.name.endsWith(".deb")) debUrl = asset.browser_download_url;
-      if (asset.name.endsWith(".deb")) AppImageUrl = asset.browser_download_url;
+      if (asset.name.endsWith(".AppImage"))
+        AppImageUrl = asset.browser_download_url;
     }
   });
 </script>
