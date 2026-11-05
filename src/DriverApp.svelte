@@ -125,13 +125,13 @@
 
     if (isTauri) {
       // パススルー方式：SoundPadやVRChatのキー操作を一切邪魔せずに検知
-      listen<string>("global-key", (event) => {
+      listen<string>("global-key", (event: { payload: string }) => {
         if (event.payload === "ArrowRight") {
           handleMainAction();
         } else if (event.payload === "ArrowLeft") {
           prevStop();
         }
-      }).then((fn) => {
+      }).then((fn: (() => void) | null) => {
         unlisten = fn;
       });
     } else {
@@ -167,20 +167,36 @@
   });
 </script>
 
-<main class="container">
-  <header class="toolbar">
-    <span class="brand">Machirun 車載器</span>
-
-    <div class="selectors">
+<header class="responsive top-margin">
+  <nav class="toolbar">
+    <span class="large-text">Machirun 車載器</span>
+    <!-- <div>
+        <button>
+          <span>Selected</span>
+          <i>arrow_drop_down</i>
+        </button>
+        <menu>
+          <li>Item 1</li>
+          <li class="active">Item 2</li>
+          <li>Item 3</li>
+        </menu>
+      </div> -->
+    <div class="field suffix border small">
       <select bind:value={route}>
         <option value="鴨飼経由">鴨飼経由</option>
         <option value="鋸倉経由">鋸倉経由</option>
       </select>
+    </div>
+
+    <div class="field suffix border small">
       <select bind:value={direction}>
         <option value="下り">下り (往路)</option>
         <option value="上り">上り (復路)</option>
       </select>
-      <!-- 1段階・3段階の切り替えトグル -->
+    </div>
+
+    <!-- 1段階・3段階の切り替えトグル -->
+    <div class="field suffix border small">
       <select bind:value={operationMode}>
         <option value="1-step">1段階式 (一発送り)</option>
         <option value="3-step">3段階式 (開閉音声式)</option>
@@ -188,32 +204,36 @@
     </div>
 
     {#if activeTrips.length > 0}
-      <select
-        bind:value={selectedTripIdx}
-        onchange={() => (currentStopIdx = 0)}
-      >
-        {#each activeTrips as trip, idx}
-          <option value={idx}>
-            {trip.trainNumber}便 ({trip.operationNumber}) {trip.destination}行
-          </option>
-        {/each}
-      </select>
+      <div class="field suffix border small">
+        <select
+          bind:value={selectedTripIdx}
+          onchange={() => (currentStopIdx = 0)}
+        >
+          {#each activeTrips as trip, idx}
+            <option value={idx}>
+              {trip.trainNumber}便 ({trip.operationNumber}) {trip.destination}行
+            </option>
+          {/each}
+        </select>
+      </div>
     {/if}
 
-    <div class="clock">
+    <span class="large-text">
       {now.toLocaleTimeString("ja-JP", { hour12: false })}
-    </div>
-  </header>
+    </span>
+  </nav>
+</header>
 
-  {#if currentTrip && currentStop}
-    <section class="monitor">
-      <div class="stop-header">
-        <span class="badge"
-          >NEXT ({currentStopIdx + 1} / {currentTrip.stops.length})</span
-        >
-        <h1 class="stop-name">{currentStop.name}</h1>
+<main class="responsive padding">
+  <article class="border round center-align">
+    {#if currentTrip && currentStop}
+      <div>
+        <span class="">
+          停留所 ({currentStopIdx + 1} / {currentTrip.stops.length})
+        </span>
+        <h1 class="bold">{currentStop.name}</h1>
         {#if operationMode === "3-step"}
-          <span class="step-indicator">
+          <span class="">
             {#if currentStep === 0}走行中
             {:else if currentStep === 1}停車中
             {:else if currentStep === 2}発車待ち
@@ -222,30 +242,34 @@
         {/if}
       </div>
 
-      <div class="times">
+      <div class="row center-align">
         {#if currentStop.arrival}
-          <div class="time-box">
-            <span class="label">予定着</span>
-            <span class="value">{currentStop.arrival}</span>
-          </div>
+          <article class="max small fill center-align middle-align">
+            <div>
+              <h2 class="bold">予定着</h2>
+              <h2 class="bold">{currentStop.arrival}</h2>
+            </div>
+          </article>
         {/if}
         {#if currentStop.departure}
-          <div class="time-box">
-            <span class="label">予定発</span>
-            <span class="value">{currentStop.departure}</span>
-          </div>
+          <article class="max small fill center-align middle-align">
+            <div>
+              <h2 class="bold">予定発</h2>
+              <h2 class="bold">{currentStop.departure}</h2>
+            </div>
+          </article>
         {/if}
       </div>
 
-      <div class="controls">
+      <nav class="">
         <button
-          class="sub"
+          class="extra"
           onclick={prevStop}
           disabled={currentStopIdx === 0 && currentStep === 0}>◀ 前へ</button
         >
 
         <button
-          class="primary"
+          class="max extra large-text"
           onclick={handleMainAction}
           disabled={currentStopIdx >= currentTrip.stops.length - 1 &&
             currentStep === 2}
@@ -260,148 +284,19 @@
             発車 ▶
           {/if}
         </button>
-      </div>
-    </section>
-  {:else}
-    <p class="empty">本日の運行便はありません</p>
-  {/if}
+      </nav>
+    {:else}
+      <p class="empty">本日の運行便はありません</p>
+    {/if}
+  </article>
 
   {#if !isTauri}
     <section class="monitor">
       <p>デスクトップ版のダウンロードはこちら</p>
-      <a class="sub" href={winUrl}>Windows</a><br />
-      <a class="sub" href={rpmUrl}>Fedora Linux (rpm)</a><br />
-      <a class="sub" href={debUrl}>Debian (deb)</a><br />
-      <a class="sub" href={AppImageUrl}>Linux版 (AppImage)</a>
+      <a class="button fill" href={winUrl}>Windows</a>
+      <a class="button fill" href={rpmUrl}>Fedora Linux (rpm)</a>
+      <a class="button fill" href={debUrl}>Debian (deb)</a>
+      <a class="button fill" href={AppImageUrl}>Linux版 (AppImage)</a>
     </section>
   {/if}
 </main>
-
-<style>
-  :global(body) {
-    margin: 0;
-    background: #0f172a;
-    color: #f8fafc;
-    font-family: sans-serif;
-  }
-  .container {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 1rem;
-  }
-  .toolbar {
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-    justify-content: space-between;
-    background: #1e293b;
-    padding: 0.75rem 1rem;
-    border-radius: 8px;
-    flex-wrap: wrap;
-  }
-  .brand {
-    font-weight: bold;
-    color: #38bdf8;
-  }
-  .selectors {
-    display: flex;
-    gap: 0.5rem;
-  }
-  select {
-    background: #0f172a;
-    color: white;
-    border: 1px solid #334155;
-    padding: 0.4rem;
-    border-radius: 4px;
-  }
-  .clock {
-    font-size: 1.5rem;
-    font-weight: bold;
-    font-variant-numeric: tabular-nums;
-    color: #38bdf8;
-  }
-  .monitor {
-    margin-top: 1.5rem;
-    background: #1e293b;
-    padding: 1.5rem;
-    border-radius: 12px;
-    text-align: center;
-  }
-  .badge {
-    background: #0284c7;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    font-size: 0.9rem;
-    font-weight: bold;
-  }
-  .step-indicator {
-    display: block;
-    margin-top: 0.5rem;
-    font-size: 1rem;
-    color: #f59e0b;
-    font-weight: bold;
-  }
-  .stop-name {
-    font-size: 3rem;
-    margin: 0.5rem 0;
-  }
-  .times {
-    display: flex;
-    justify-content: center;
-    gap: 2rem;
-    margin: 1.5rem 0;
-  }
-  .time-box {
-    background: #0f172a;
-    padding: 1rem 2rem;
-    border-radius: 8px;
-  }
-  .label {
-    display: block;
-    font-size: 0.9rem;
-    color: #94a3b8;
-  }
-  .value {
-    font-size: 2.5rem;
-    font-weight: bold;
-    font-variant-numeric: tabular-nums;
-  }
-  .controls {
-    display: flex;
-    gap: 1rem;
-    margin-top: 1.5rem;
-  }
-  a,
-  button {
-    display: block;
-    text-decoration: none;
-    padding: 1rem;
-    font-size: 1.25rem;
-    font-weight: bold;
-    border: none;
-    border-radius: 8px;
-    background: #334155;
-    color: white;
-    cursor: pointer;
-  }
-  a.sub,
-  button.sub {
-    flex: 1;
-  }
-  button.primary {
-    flex: 3;
-    background: #0284c7;
-  }
-  button.primary:hover {
-    background: #0284c7dd;
-  }
-  button:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  .empty {
-    text-align: center;
-    color: #94a3b8;
-    margin-top: 3rem;
-  }
-</style>

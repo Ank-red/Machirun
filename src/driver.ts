@@ -1,3 +1,5 @@
+import "beercss";
+import './main.scss'
 import { mount } from 'svelte';
 import DriverApp from './DriverApp.svelte';
 
