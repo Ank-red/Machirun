@@ -34,6 +34,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [ "Japanese" ],
+        "installerHooks": "./hooks.nsh"
+      }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
