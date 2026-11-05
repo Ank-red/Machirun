@@ -147,6 +147,8 @@
 
   // ダウンロードURL
   let rpmUrl = $state("#");
+  let debUrl = $state("#");
+  let AppImageUrl = $state("#");
   let winUrl = $state("#");
 
   onMount(async () => {
@@ -159,6 +161,8 @@
       if (asset.name.endsWith("-setup.exe"))
         winUrl = asset.browser_download_url;
       if (asset.name.endsWith(".rpm")) rpmUrl = asset.browser_download_url;
+      if (asset.name.endsWith(".deb")) debUrl = asset.browser_download_url;
+      if (asset.name.endsWith(".deb")) AppImageUrl = asset.browser_download_url;
     }
   });
 </script>
@@ -265,8 +269,10 @@
   {#if !isTauri}
     <section class="monitor">
       <p>デスクトップ版のダウンロードはこちら</p>
-      <a class="sub" href={rpmUrl}>Fedora Linux向け</a><br />
-      <a class="sub" href={winUrl}>Windows向け</a>
+      <a class="sub" href={winUrl}>Windows</a><br />
+      <a class="sub" href={rpmUrl}>Fedora Linux (rpm)</a><br />
+      <a class="sub" href={debUrl}>Debian (deb)</a><br />
+      <a class="sub" href={AppImageUrl}>Linux版 (AppImage)</a>
     </section>
   {/if}
 </main>
