@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Machirun 車載器",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "identifier": "city.machibayashi.machirun",
   "build": {
     "frontendDist": "../dist",
