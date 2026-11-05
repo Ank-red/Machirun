@@ -8,6 +8,7 @@
   import csvKamoNobori from "./data/鴨飼経由_上り.csv?raw";
   import csvNokoKudari from "./data/鋸倉経由_下り.csv?raw";
   import csvNokoNobori from "./data/鋸倉経由_上り.csv?raw";
+  import Dropdown from "./lib/Dropdown.svelte";
 
   let route = $state<string>("鴨飼経由");
   let direction = $state<string>("下り");
@@ -169,54 +170,46 @@
 </script>
 
 <header class="responsive top-margin">
-  <nav class="toolbar">
-    <span class="large-text bold">Machirun 車載器</span>
-    <!-- <div>
-        <button>
-          <span>Selected</span>
-          <i>arrow_drop_down</i>
-        </button>
-        <menu>
-          <li>Item 1</li>
-          <li class="active">Item 2</li>
-          <li>Item 3</li>
-        </menu>
-      </div> -->
-    <div class="field suffix border small">
-      <select bind:value={route}>
-        <option value="鴨飼経由">鴨飼経由</option>
-        <option value="鋸倉経由">鋸倉経由</option>
-      </select>
-    </div>
+  <nav class="toolbar padding">
+    <span class="large-text bold left-margin">Machirun 車載器</span>
 
-    <div class="field suffix border small">
-      <select bind:value={direction}>
-        <option value="下り">下り (往路)</option>
-        <option value="上り">上り (復路)</option>
-      </select>
-    </div>
+    <div class="max"></div>
+
+    <!-- 経由地 -->
+    <Dropdown
+      bind:value={route}
+      options={[
+        { value: "鴨飼経由", label: "鴨飼経由" },
+        { value: "鋸倉経由", label: "鋸倉経由" },
+      ]}
+    />
+
+    <!-- 上下方向 -->
+    <Dropdown
+      bind:value={direction}
+      options={[
+        { value: "下り", label: "下り" },
+        { value: "上り", label: "上り" },
+      ]}
+    />
 
     <!-- 1段階・3段階の切り替えトグル -->
-    <div class="field suffix border small">
-      <select bind:value={operationMode}>
-        <option value="1-step">1段階式 (一発送り)</option>
-        <option value="3-step">3段階式 (開閉音声式)</option>
-      </select>
-    </div>
+    <Dropdown
+      bind:value={operationMode}
+      options={[
+        { value: "1-step", label: "1段階式 (一発送り)" },
+        { value: "3-step", label: "3段階式 (開閉音声式)" },
+      ]}
+    />
 
     {#if activeTrips.length > 0}
-      <div class="field suffix border small">
-        <select
-          bind:value={selectedTripIdx}
-          onchange={() => (currentStopIdx = 0)}
-        >
-          {#each activeTrips as trip, idx}
-            <option value={idx}>
-              {trip.trainNumber}便 ({trip.operationNumber}) {trip.destination}行
-            </option>
-          {/each}
-        </select>
-      </div>
+      <Dropdown
+        bind:value={selectedTripIdx}
+        options={activeTrips.map((trip, idx) => ({
+          value: idx,
+          label: `${trip.trainNumber}便 (${trip.operationNumber}) ${trip.destination}行`,
+        }))}
+      />
     {/if}
   </nav>
 </header>
