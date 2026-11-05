@@ -3,3 +3,4 @@
 !macro NSIS_HOOK_PREINSTALL
 RMDir /r "$LOCALAPPDATA\machirun"
 RMDir /r "$LOCALAPPDATA\Machirun 車載器"
+!macroend
