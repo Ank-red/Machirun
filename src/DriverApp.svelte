@@ -226,18 +226,18 @@
         <h1 class="max bold center-align">
           {currentStop.name}
         </h1>
-        {#if operationMode === "3-step"}
-          <span class="">
-            {#if currentStep === 0}走行中
-            {:else if currentStep === 1}停車中
-            {:else if currentStep === 2}発車待ち
-            {/if}
-          </span>
-        {/if}
         <h3 class="small-width bold padding fill round center-align">
           {now.toLocaleTimeString("ja-JP", { hour12: false })}
         </h3>
       </div>
+      {#if operationMode === "3-step"}
+        <span class="large-text">
+          {#if currentStep === 0}走行中
+          {:else if currentStep === 1}停車中
+          {:else if currentStep === 2}発車待ち
+          {/if}
+        </span>
+      {/if}
 
       <div class="row center-align">
         {#if currentStop.arrival}
