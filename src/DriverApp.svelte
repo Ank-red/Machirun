@@ -170,7 +170,7 @@
 
 <header class="responsive top-margin">
   <nav class="toolbar">
-    <span class="large-text">Machirun 車載器</span>
+    <span class="large-text bold">Machirun 車載器</span>
     <!-- <div>
         <button>
           <span>Selected</span>
@@ -218,21 +218,21 @@
         </select>
       </div>
     {/if}
-
-    <span class="large-text">
-      {now.toLocaleTimeString("ja-JP", { hour12: false })}
-    </span>
   </nav>
 </header>
 
 <main class="responsive padding">
   <article class="border round center-align">
     {#if currentTrip && currentStop}
-      <div>
-        <span class="">
-          停留所 ({currentStopIdx + 1} / {currentTrip.stops.length})
-        </span>
-        <h1 class="bold">{currentStop.name}</h1>
+      <div class="row center-align">
+        <div
+          class="small-width bold padding fill round center-align large-text"
+        >
+          停留所 <br />({currentStopIdx + 1} / {currentTrip.stops.length})
+        </div>
+        <h1 class="max bold center-align">
+          {currentStop.name}
+        </h1>
         {#if operationMode === "3-step"}
           <span class="">
             {#if currentStep === 0}走行中
@@ -241,6 +241,9 @@
             {/if}
           </span>
         {/if}
+        <h3 class="small-width bold padding fill round center-align">
+          {now.toLocaleTimeString("ja-JP", { hour12: false })}
+        </h3>
       </div>
 
       <div class="row center-align">
@@ -292,11 +295,11 @@
   </article>
 
   {#if !isTauri}
-    <section class="monitor">
+    <section>
       <p>デスクトップ版のダウンロードはこちら</p>
       <a class="button fill" href={winUrl}>Windows</a>
       <a class="button fill" href={rpmUrl}>Fedora Linux (rpm)</a>
-      <a class="button fill" href={debUrl}>Debian (deb)</a>
+      <a class="button fill" href={debUrl}>Debian GNU/Linux (deb)</a>
       <a class="button fill" href={AppImageUrl}>Linux版 (AppImage)</a>
     </section>
   {/if}
