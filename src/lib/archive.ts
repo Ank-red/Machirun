@@ -40,9 +40,7 @@ export async function processImageToAvif(file: File): Promise<{
   }
 
   // SHA-256の先頭16文字をハッシュIDにする（重複排除＆文字化け防止）
-  const hashBuffer = await crypto.subtle.digest("SHA-256", avifBytes);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  const hashId = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+  const hashId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
   const fileName = `${hashId}.avif`;
 
   const blob = new Blob([avifBytes], { type: "image/avif" });
