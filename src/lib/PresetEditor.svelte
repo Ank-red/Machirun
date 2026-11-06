@@ -257,6 +257,13 @@
           />
 
           <ul>
+            {#each Object.entries(preset.images) as [hashId, asset]}
+              <li>
+                <code>{asset.fileName}</code> ← {asset.originalName}
+              </li>
+            {/each}
+          </ul>
+          <ul>
             {#each Object.entries(preset.audios) as [hashId, asset]}
               <li>
                 <code>{asset.fileName}</code> ← {asset.originalName}
