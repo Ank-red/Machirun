@@ -14,6 +14,10 @@ export interface LoadedArchive {
   audioUrls: Record<string, string>;      // target -> 再生用 Object URL
 }
 
+function toBlob(bytes: Uint8Array, type?: string): Blob {
+  return new Blob([bytes as BlobPart], type ? { type } : undefined);
+}
+
 // 1. 任意の画像Fileを透過維持のままAVIFへ変換し、ハッシュIDを返す
 export async function processImageToAvif(file: File): Promise<{
   hashId: string;
@@ -44,7 +48,7 @@ export async function processImageToAvif(file: File): Promise<{
   const hashId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
   const fileName = `${hashId}.avif`;
 
-  const blob = new Blob([avifBytes], { type: "image/avif" });
+  const blob = toBlob(avifBytes, "image/avif");
   const objectUrl = URL.createObjectURL(blob);
 
   return {
@@ -71,7 +75,7 @@ export function exportArchiveMchrn(data: LoadedArchive): Blob {
   }
 
   const zipped = zipSync(files);
-  return new Blob([zipped], { type: "application/octet-stream" });
+  return toBlob(zipped, "application/octet-stream");
 }
 
 // 3. アーカイブ（ZIP）の読み込み
@@ -93,7 +97,7 @@ export async function importArchiveZip(file: File): Promise<LoadedArchive> {
     const path = `image/${asset.fileName}`;
     if (unzipped[path]) {
       imageBlobs[asset.fileName] = unzipped[path];
-      imageUrls[hashId] = URL.createObjectURL(new Blob([unzipped[path]], { type: "image/avif" }));
+      imageUrls[hashId] = URL.createObjectURL(toBlob(unzipped[path], "image/avif"));
     }
   }
 
@@ -101,7 +105,7 @@ export async function importArchiveZip(file: File): Promise<LoadedArchive> {
   for (const [entryPath, bytes] of Object.entries(unzipped)) {
     if (entryPath.startsWith("audio/") && bytes.length > 0) {
       audioBlobs[entryPath] = bytes;
-      audioUrls[entryPath] = URL.createObjectURL(new Blob([bytes]));
+      audioUrls[entryPath] = URL.createObjectURL(toBlob(bytes));
     }
   }
 
@@ -168,7 +172,7 @@ export async function processAudioToOpus(file: File): Promise<{
   const hashId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
   const fileName = `${hashId}.opus`;
 
-  const blob = new Blob([opusBytes], { type: "audio/opus; codecs=opus" });
+  const blob = toBlob(opusBytes, "audio/opus");
   const objectUrl = URL.createObjectURL(blob);
 
   return {
