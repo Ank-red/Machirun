@@ -12,6 +12,9 @@ export default defineConfig(({ mode }) => {
         registerType: 'autoUpdate',
         injectRegister: 'auto',
         includeAssets: ['favicon.ico', 'icon.png'],
+        workbox: {
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        },
         manifest: {
           name: 'Machirun',
           short_name: 'Machirun',
