@@ -2,11 +2,22 @@
 <html lang="ja">
 
 <head>
+  <!-- META -->
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+  <!-- PWA -->
   <meta name="theme-color" content="#106f10" />
   <link rel="apple-touch-icon" href="/icon.png" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- OGP -->
+  <meta property="og:title" content="{APP_TITLE} Driver">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{APP_URL}">
+  <meta property="og:image" content="{APP_URL}/icon.png">
+  <meta property="og:site_name" content="{APP_TITLE} Driver">
+  <meta property="og:description" content="{APP_DESCRIPTION}">
+  <meta property="og:locale" content="ja">
   <!-- フォント -->
   <link rel="dns-prefetch" href="https://fonts.googleapis.com">
   <link rel="dns-prefetch" href="https://fonts.gstatic.com">
@@ -16,7 +27,7 @@
     href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&family=Noto+Sans+JP:wght@100..900&display=swap"
     rel="stylesheet">
   <!-- TITLE -->
-  <title>Machirun Driver</title>
+  <title>{APP_TITLE} Driver - {APP_VERSION}</title>
 </head>
 
 <body>
