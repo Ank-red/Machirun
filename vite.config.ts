@@ -7,7 +7,7 @@ import { resolve } from 'path';
 export default defineConfig(({ mode }) => {
   const isTauri = process.env.TAURI_ENV_PLATFORM !== undefined || process.env.TAURI === 'true';
   process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
-  const define = {
+  const define: Record<string, string> = {
     APP_TITLE: process.env.VITE_APP_TITLE ? process.env.VITE_APP_TITLE : "Unknown App Title",
     APP_SHORT_TITLE: process.env.VITE_APP_SHORT_TITLE ? process.env.VITE_APP_SHORT_TITLE : "UnknownApp",
     APP_URL: process.env.VITE_APP_URL ? process.env.VITE_APP_URL : "UnknownApp",
@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => {
           handler: (html: string): string =>
             html.replace(/{(.*?)}/g, (match, p1) =>
               define[p1] ?? match),
+          optimizeDeps: { exclude: ["@jsquash/avif", "wasm-media-encoders"] }
         },
       },
       svelte(),
