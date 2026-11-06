@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "description": "町林市バスアプリ",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -24,7 +25,10 @@
     "wrangler": "^4.156.2"
   },
   "dependencies": {
+    "@jsquash/avif": "^2.1.1",
     "beercss": "^5.0.3",
-    "material-dynamic-colors": "^1.2.0"
+    "fflate": "^0.8.3",
+    "material-dynamic-colors": "^1.2.0",
+    "wasm-media-encoders": "^0.7.0"
   }
 }

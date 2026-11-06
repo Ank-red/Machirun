@@ -74,7 +74,19 @@ export function parseOptDiaCsv(csvText: string): BusTrip[] {
   }).filter((trip) => trip.trainNumber && trip.stops.length > 0);
 }
 
-// 2. 便名（百の位）による当日運行便のフィルタリング
+// 2. CSVから路線全体の重複なしマスター停留所名リストを抽出（エディタ用）
+export function extractMasterStops(csvText: string): string[] {
+  const trips = parseOptDiaCsv(csvText);
+  const stopSet = new Set<string>();
+  for (const trip of trips) {
+    for (const stop of trip.stops) {
+      stopSet.add(stop.name);
+    }
+  }
+  return Array.from(stopSet);
+}
+
+// 3. 便名（百の位）による当日運行便のフィルタリング
 export function getTodayTrips(trips: BusTrip[], now: Date = new Date()): BusTrip[] {
   // 午前4時より前は「前日の深夜営業」として扱う
   const serviceDate = new Date(now);

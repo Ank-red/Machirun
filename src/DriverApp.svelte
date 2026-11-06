@@ -2,13 +2,14 @@
   import { onMount } from "svelte";
   import { parseOptDiaCsv, getTodayTrips, type BusTrip } from "./lib/timetable";
   import { listen } from "@tauri-apps/api/event";
+  import Dropdown from "./lib/Dropdown.svelte";
+  import PresetEditor from "./lib/PresetEditor.svelte";
 
   // CSVファイルを個別に明示インポート（パスのトラブルを防ぐ一番確実な方法）
   import csvKamoKudari from "./data/鴨飼経由_下り.csv?raw";
   import csvKamoNobori from "./data/鴨飼経由_上り.csv?raw";
   import csvNokoKudari from "./data/鋸倉経由_下り.csv?raw";
   import csvNokoNobori from "./data/鋸倉経由_上り.csv?raw";
-  import Dropdown from "./lib/Dropdown.svelte";
 
   let route = $state<string>("鴨飼経由");
   let direction = $state<string>("下り");
@@ -296,4 +297,6 @@
       <a class="button fill" href={AppImageUrl}>Linux版 (AppImage)</a>
     </section>
   {/if}
+
+  <PresetEditor />
 </main>
