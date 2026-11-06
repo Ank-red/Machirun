@@ -3,7 +3,7 @@
   import { extractMasterStops } from "./timetable";
   import {
     processImageToAvif,
-    exportArchiveZip,
+    exportArchiveMchrn,
     importArchiveZip,
     processAudioToOpus,
   } from "./archive";
@@ -19,7 +19,7 @@
       stop: { name: "停留所名レイヤー", linkedToCsvStop: true, items: {} },
       fare: { name: "運賃表レイヤー", items: {} },
     },
-    sounds: {},
+    audios: {},
     lcdGroups: {
       "1": {
         name: "通常走行ループ",
@@ -49,7 +49,6 @@
     stop: 1,
     fare: 1,
   });
-  let isConverting = $state(false);
 
   let currentPreviewSlide = $derived<LcdSlide | undefined>(
     preset.lcdGroups[previewGroupNo]?.slides[previewSlideIdx],
@@ -62,49 +61,55 @@
     timetableCsv = await file.text();
   }
 
-  // 画像の一括登録（自動でAVIF変換＋ハッシュ化）
+  // 画像アップロード処理
+  let isRegisteringImage = $state(false);
   async function handleImageUpload(e: Event) {
     const files = (e.target as HTMLInputElement).files;
     if (!files || files.length === 0) return;
-    isConverting = true;
+    const fileList = Array.from(files);
+    isRegisteringImage = true;
     try {
-      for (const file of Array.from(files)) {
-        const res = await processImageToAvif(file);
-        preset.images[res.hashId] = res.asset;
-        imageBlobs[res.asset.fileName] = res.binary;
-        imageUrls[res.hashId] = res.objectUrl;
+      for (const file of fileList) {
+        try {
+          const res = await processImageToAvif(file);
+          preset.images[res.hashId] = res.asset;
+          imageBlobs[res.asset.fileName] = res.binary;
+          imageUrls[res.hashId] = res.objectUrl;
+        } catch (err) {
+          console.error(`画像変換エラー (${file.name}):`, err);
+        }
       }
     } finally {
-      isConverting = false;
+      isRegisteringImage = false;
     }
   }
 
   // 音声アップロード処理
-  let isEncodingAudio = $state(false);
+  let isRegisteringAudio = $state(false);
   async function handleAudioUpload(e: Event) {
     const files = (e.target as HTMLInputElement).files;
     if (!files || files.length === 0) return;
-    isEncodingAudio = true;
+    const fileList = Array.from(files);
+    isRegisteringAudio = true;
     try {
-      for (const file of Array.from(files)) {
-        const res = await processAudioToOpus(file);
-        const nextNo = String(Object.keys(preset.sounds).length + 1);
-        preset.sounds[nextNo] = {
-          type: "file",
-          target: res.targetPath,
-          label: res.originalName.replace(/\.[^/.]+$/, ""), // 拡張子を除いたファイル名を初期ラベルに
-        };
-        audioBlobs[res.targetPath] = res.binary;
-        audioUrls[res.targetPath] = res.objectUrl;
+      for (const file of fileList) {
+        try {
+          const res = await processAudioToOpus(file);
+          preset.images[res.hashId] = res.asset;
+          imageBlobs[res.asset.fileName] = res.binary;
+          imageUrls[res.hashId] = res.objectUrl;
+        } catch (err) {
+          console.error(`音声変換エラー (${file.name}):`, err);
+        }
       }
     } finally {
-      isEncodingAudio = false;
+      isRegisteringAudio = false;
     }
   }
 
   // ZIPエクスポート
   function handleExport() {
-    const blob = exportArchiveZip({
+    const blob = exportArchiveMchrn({
       preset,
       timetableCsv,
       imageBlobs,
@@ -160,6 +165,9 @@
     <!-- 左カラム：編集タブ -->
     <div class="s12 m7">
       <div class="tabs left-align">
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_missing_attribute -->
         <a
           class:active={activeTab === "base"}
           onclick={() => (activeTab = "base")}>1. 基本・素材</a
@@ -213,11 +221,11 @@
           <h6>画像アセット登録</h6>
           <button
             class="border"
-            disabled={isConverting}
+            disabled={isRegisteringImage}
             onclick={() => document.getElementById("img-in")?.click()}
           >
             <i>image</i><span
-              >{isConverting ? "変換中..." : "画像を追加 (複数可)"}</span
+              >{isRegisteringImage ? "変換中..." : "画像を追加 (複数可)"}</span
             >
           </button>
           <input
@@ -233,11 +241,11 @@
           <h6>音声アセット登録</h6>
           <button
             class="border"
-            disabled={isConverting}
+            disabled={isRegisteringAudio}
             onclick={() => document.getElementById("audio-in")?.click()}
           >
             <i>image</i><span
-              >{isConverting ? "変換中..." : "音声を追加 (複数可)"}</span
+              >{isRegisteringAudio ? "変換中..." : "音声を追加 (複数可)"}</span
             >
           </button>
           <input
@@ -250,7 +258,7 @@
           />
 
           <ul>
-            {#each Object.entries(preset.sounds) as [hashId, asset]}
+            {#each Object.entries(preset.audios) as [hashId, asset]}
               <li>
                 <code>{asset.fileName}</code> ← {asset.originalName}
               </li>

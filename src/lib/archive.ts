@@ -2,7 +2,7 @@
 import { zipSync, unzipSync, strToU8, strFromU8, type Zippable } from "fflate";
 import { encode as encodeAvif } from "@jsquash/avif";
 import { createOggEncoder } from "wasm-media-encoders";
-import type { RoutePreset, ImageAsset } from "./preset";
+import type { RoutePreset, ImageAsset, AudioAsset } from "./preset";
 
 // エディタおよび再生時にメモリ上で保持する実ファイルデータ
 export interface LoadedArchive {
@@ -14,7 +14,7 @@ export interface LoadedArchive {
   audioUrls: Record<string, string>;      // target -> 再生用 Object URL
 }
 
-// 1. 任意の画像Fileを透過維持のままAVIFへ変換し、SHA-256ハッシュIDを返す
+// 1. 任意の画像Fileを透過維持のままAVIFへ変換し、ハッシュIDを返す
 export async function processImageToAvif(file: File): Promise<{
   hashId: string;
   asset: ImageAsset;
@@ -34,12 +34,13 @@ export async function processImageToAvif(file: File): Promise<{
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(bitmap, 0, 0);
     const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+    bitmap.close();
 
     const encodedBuffer = await encodeAvif(imageData, { quality: 80 });
     avifBytes = new Uint8Array(encodedBuffer);
   }
 
-  // SHA-256の先頭16文字をハッシュIDにする（重複排除＆文字化け防止）
+  // UUID
   const hashId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
   const fileName = `${hashId}.avif`;
 
@@ -54,23 +55,23 @@ export async function processImageToAvif(file: File): Promise<{
   };
 }
 
-// 2. アーカイブ（ZIP）の書き出し
-export function exportArchiveZip(data: LoadedArchive): Blob {
-  const files: Record<string, Uint8Array> = {
-    "preset.json": strToU8(JSON.stringify(data.preset, null, 2)),
-    "timetable.csv": strToU8(data.timetableCsv),
+// 2. アーカイブ（.mchrn）の書き出し：テキストは最大圧縮(9)、画像・音声は無圧縮(0)
+export function exportArchiveMchrn(data: LoadedArchive): Blob {
+  const files: Zippable = {
+    "preset.json": [strToU8(JSON.stringify(data.preset, null, 2)), { level: 9 }],
+    "timetable.csv": [strToU8(data.timetableCsv), { level: 9 }],
   };
 
   for (const [fileName, bin] of Object.entries(data.imageBlobs)) {
-    files[`image/${fileName}`] = bin;
+    files[`image/${fileName}`] = [bin, { level: 0 }];
   }
   for (const [targetPath, bin] of Object.entries(data.audioBlobs)) {
     const cleanPath = targetPath.startsWith("audio/") ? targetPath : `audio/${targetPath}`;
-    files[cleanPath] = bin;
+    files[cleanPath] = [bin, { level: 0 }];
   }
 
-  const zipped = zipSync(files, { level: 6 });
-  return new Blob([zipped], { type: "application/zip" });
+  const zipped = zipSync(files);
+  return new Blob([zipped], { type: "application/octet-stream" });
 }
 
 // 3. アーカイブ（ZIP）の読み込み
@@ -107,17 +108,16 @@ export async function importArchiveZip(file: File): Promise<LoadedArchive> {
   return { preset, timetableCsv, imageBlobs, imageUrls, audioBlobs, audioUrls };
 }
 
-// 音声ファイル（WAV/FLAC等）をOgg Opusへ高速変換し、ハッシュIDとバイナリを返す
+// 音声ファイル（WAV/FLAC等）をOpusへ高速変換し、ハッシュIDとバイナリを返す
 export async function processAudioToOpus(file: File): Promise<{
   hashId: string;
-  targetPath: string; // "audio/<hash>.opus"
-  originalName: string;
+  asset: AudioAsset;
   binary: Uint8Array;
   objectUrl: string;
 }> {
   let opusBytes: Uint8Array;
 
-  if (file.name.toLowerCase().endsWith(".opus") || file.type === "audio/ogg") {
+  if (file.name.toLowerCase().endsWith(".opus") || file.type === "audio/opus") {
     opusBytes = new Uint8Array(await file.arrayBuffer());
   } else {
     // 1. Web Audio API で WAV / FLAC をデコードして Float32 PCM を取得
@@ -165,40 +165,16 @@ export async function processAudioToOpus(file: File): Promise<{
   }
 
   // SHA-256ハッシュ生成
-  const hashBuffer = await crypto.subtle.digest("SHA-256", opusBytes);
-  const hashId = Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 16);
+  const hashId = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const fileName = `${hashId}.opus`;
 
-  const targetPath = `audio/${hashId}.opus`;
   const blob = new Blob([opusBytes], { type: "audio/opus; codecs=opus" });
   const objectUrl = URL.createObjectURL(blob);
 
   return {
     hashId,
-    targetPath,
-    originalName: file.name,
+    asset: { fileName, originalName: file.name },
     binary: opusBytes,
     objectUrl,
   };
-}
-
-// アーカイブ（.mchrn）の書き出し：テキストは最大圧縮(9)、画像・音声は無圧縮(0)
-export function exportArchiveMchrn(data: LoadedArchive): Blob {
-  const files: Zippable = {
-    "preset.json": [strToU8(JSON.stringify(data.preset, null, 2)), { level: 9 }],
-    "timetable.csv": [strToU8(data.timetableCsv), { level: 9 }],
-  };
-
-  for (const [fileName, bin] of Object.entries(data.imageBlobs)) {
-    files[`image/${fileName}`] = [bin, { level: 0 }];
-  }
-  for (const [targetPath, bin] of Object.entries(data.audioBlobs)) {
-    const cleanPath = targetPath.startsWith("audio/") ? targetPath : `audio/${targetPath}`;
-    files[cleanPath] = [bin, { level: 0 }];
-  }
-
-  const zipped = zipSync(files);
-  return new Blob([zipped], { type: "application/octet-stream" });
 }
