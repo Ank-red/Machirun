@@ -35,7 +35,7 @@ export interface ActionStep {
   label: string;
   setStopIndex?: number | "+1";
   setLayers?: Record<string, number | "+1" | null>;
-  playAudioNo?: number;
+  playAudioId?: string;
   setLcdGroupNo?: number;
 }
 
