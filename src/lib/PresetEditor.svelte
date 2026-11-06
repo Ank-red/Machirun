@@ -95,9 +95,9 @@
       for (const file of fileList) {
         try {
           const res = await processAudioToOpus(file);
-          preset.images[res.hashId] = res.asset;
-          imageBlobs[res.asset.fileName] = res.binary;
-          imageUrls[res.hashId] = res.objectUrl;
+          preset.audios[res.hashId] = res.asset;
+          audioBlobs[res.asset.fileName] = res.binary;
+          audioUrls[res.hashId] = res.objectUrl;
         } catch (err) {
           console.error(`音声変換エラー (${file.name}):`, err);
         }
@@ -165,10 +165,9 @@
     <!-- 左カラム：編集タブ -->
     <div class="s12 m7">
       <div class="tabs left-align">
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <!-- svelte-ignore a11y_missing_attribute -->
         <a
+          role="tab"
+          tabindex="0"
           class:active={activeTab === "base"}
           onclick={() => (activeTab = "base")}>1. 基本・素材</a
         >
