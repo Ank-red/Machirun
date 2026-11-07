@@ -1,10 +1,12 @@
 <script lang="ts">
+  // --- Imports ---
   import type { LcdSlide, LayerSlot } from "./preset";
 
+  // --- Props ---
   let {
     slide,
     layerSlots,
-    imageUrls, // hashId -> Object URL (blob:...)
+    imageUrls,
     activeLayerIndices = {},
   }: {
     slide?: LcdSlide;
@@ -13,24 +15,31 @@
     activeLayerIndices?: Record<string, number | "+1" | null>;
   } = $props();
 
+  // --- State & Derived ---
   let baseImageUrl = $derived(
-    slide?.baseImageId ? imageUrls[slide.baseImageId] ?? "" : ""
+    slide?.baseImageId ? (imageUrls[slide.baseImageId] ?? "") : "",
   );
 
   let resolvedLayerUrls = $derived(
-    (slide?.visibleLayers ?? []).map((slotKey) => {
-      const slot = layerSlots[slotKey];
-      if (!slot) return null;
+    (slide?.visibleLayers ?? [])
+      .map((slotKey) => {
+        const slot = layerSlots[slotKey];
+        if (!slot) return null;
 
-      const itemIdx = slide?.layerOverrides?.[slotKey] ?? activeLayerIndices[slotKey];
-      if (itemIdx === null || itemIdx === undefined || itemIdx === "+1") return null;
+        const itemIdx =
+          slide?.layerOverrides?.[slotKey] ?? activeLayerIndices[slotKey];
+        if (itemIdx === null || itemIdx === undefined || itemIdx === "+1") {
+          return null;
+        }
 
-      const hashId = slot.items[String(itemIdx)];
-      return hashId ? imageUrls[hashId] ?? null : null;
-    }).filter((url): url is string => Boolean(url))
+        const hashId = slot.items[String(itemIdx)];
+        return hashId ? (imageUrls[hashId] ?? null) : null;
+      })
+      .filter((url): url is string => Boolean(url)),
   );
 </script>
 
+<!-- 車内LCD 16:9 レイヤー合成スクリーン -->
 <div class="lcd-container">
   {#if baseImageUrl}
     <img src={baseImageUrl} alt="LCD Base" class="lcd-layer" />
@@ -49,6 +58,7 @@
     overflow: hidden;
     user-select: none;
   }
+
   .lcd-layer {
     position: absolute;
     top: 0;

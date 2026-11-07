@@ -1,4 +1,5 @@
 <script lang="ts" generics="T">
+  // --- Props ---
   let {
     value = $bindable(),
     options,
@@ -9,21 +10,26 @@
     onchange?: (val: T) => void;
   } = $props();
 
-  // 現在選択されている項目の表示名を取得
+  // --- State & Derived ---
   let selectedLabel = $derived(
     options.find((o) => o.value === value)?.label ?? String(value),
   );
 
-  function selectItem(val: T) {
+  // --- Handlers & Methods ---
+  /**
+   * ドロップダウン項目を選択し、メニューのフォーカスを解除して閉じる
+   * @param val 選択された項目の値
+   */
+  function selectItem(val: T): void {
     value = val;
     onchange?.(val);
-    // 選択後にフォーカスを外してBeerCSSのメニューを閉じる
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
   }
 </script>
 
+<!-- BeerCSS メニュードロップダウン -->
 <div>
   <button class="border">
     <span>{selectedLabel}</span>

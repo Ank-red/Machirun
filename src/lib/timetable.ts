@@ -1,9 +1,13 @@
+// --- Types ---
+
+/** 1つの停留所における到着・発車予定時刻 */
 export interface StopSchedule {
   name: string;
   arrival: string | null;
   departure: string | null;
 }
 
+/** 1便分の運行ダイヤ情報 */
 export interface BusTrip {
   trainNumber: string;
   operationDay: string;
@@ -12,7 +16,18 @@ export interface BusTrip {
   stops: StopSchedule[];
 }
 
-// 1. CSVパース処理
+// --- Constants ---
+
+const META_KEYS = ["列車番号", "運転日", "運用番号", "両数", "種別・愛称", "号数", "行き先"];
+const FOOTER_KEYS = ["連続する列車", "備考"];
+
+// --- Functions ---
+
+/**
+ * OptDia形式のCSV文字列をパースし、便ごとの運行ダイヤ配列を返す
+ * @param csvText OptDia形式のCSVテキスト
+ * @returns パースされた便データの配列
+ */
 export function parseOptDiaCsv(csvText: string): BusTrip[] {
   const lines = csvText
     .trim()
@@ -22,17 +37,14 @@ export function parseOptDiaCsv(csvText: string): BusTrip[] {
   const rowMap = new Map<string, string[]>();
   const stopRows: { name: string; type: string; times: string[] }[] = [];
 
-  const metaKeys = ["列車番号", "運転日", "運用番号", "両数", "種別・愛称", "号数", "行き先"];
-  const footerKeys = ["連続する列車", "備考"];
-
   for (const cols of lines) {
-    const key = cols[0]?.replace(/^\uFEFF/, "").trim(); // BOM除去
+    const key = cols[0]?.replace(/^\uFEFF/, "").trim();
     const type = cols[1]?.trim() || "";
     const values = cols.slice(2);
 
-    if (!key || footerKeys.includes(key)) continue;
+    if (!key || FOOTER_KEYS.includes(key)) continue;
 
-    if (metaKeys.includes(key)) {
+    if (META_KEYS.includes(key)) {
       rowMap.set(key, values);
     } else {
       stopRows.push({ name: key, type, times: values });
@@ -44,37 +56,42 @@ export function parseOptDiaCsv(csvText: string): BusTrip[] {
   const operationNumbers = rowMap.get("運用番号") || [];
   const destinations = rowMap.get("行き先") || [];
 
-  return trainNumbers.map((trainNum, colIdx) => {
-    const stops: StopSchedule[] = [];
+  return trainNumbers
+    .map((trainNum, colIdx) => {
+      const stops: StopSchedule[] = [];
 
-    for (const row of stopRows) {
-      const time = row.times[colIdx]?.trim() || "";
-      if (!time) continue; // 通過またはデータなしの停留所はスキップ
+      for (const row of stopRows) {
+        const time = row.times[colIdx]?.trim() || "";
+        if (!time) continue;
 
-      const prevStop = stops[stops.length - 1];
-      // 直前の行と同じ停留所名で「着 → 発」となっている場合は1つに統合
-      if (prevStop && prevStop.name === row.name && row.type === "発" && !prevStop.departure) {
-        prevStop.departure = time;
-      } else {
-        stops.push({
-          name: row.name,
-          arrival: row.type === "着" ? time : null,
-          departure: row.type !== "着" ? time : null,
-        });
+        const prevStop = stops[stops.length - 1];
+        if (prevStop && prevStop.name === row.name && row.type === "発" && !prevStop.departure) {
+          prevStop.departure = time;
+        } else {
+          stops.push({
+            name: row.name,
+            arrival: row.type === "着" ? time : null,
+            departure: row.type !== "着" ? time : null,
+          });
+        }
       }
-    }
 
-    return {
-      trainNumber: trainNum.trim(),
-      operationDay: operationDays[colIdx]?.trim() || "",
-      operationNumber: operationNumbers[colIdx]?.trim() || "",
-      destination: destinations[colIdx]?.trim() || "",
-      stops,
-    };
-  }).filter((trip) => trip.trainNumber && trip.stops.length > 0);
+      return {
+        trainNumber: trainNum.trim(),
+        operationDay: operationDays[colIdx]?.trim() || "",
+        operationNumber: operationNumbers[colIdx]?.trim() || "",
+        destination: destinations[colIdx]?.trim() || "",
+        stops,
+      };
+    })
+    .filter((trip) => trip.trainNumber && trip.stops.length > 0);
 }
 
-// 2. CSVから路線全体の重複なしマスター停留所名リストを抽出（エディタ用）
+/**
+ * CSVテキストから路線全体の重複なしマスター停留所名リストを抽出する
+ * @param csvText OptDia形式のCSVテキスト
+ * @returns 停留所名の配列（出現順）
+ */
 export function extractMasterStops(csvText: string): string[] {
   const trips = parseOptDiaCsv(csvText);
   const stopSet = new Set<string>();
@@ -86,9 +103,17 @@ export function extractMasterStops(csvText: string): string[] {
   return Array.from(stopSet);
 }
 
-// 3. 便名（百の位）による当日運行便のフィルタリング
+/**
+ * 便番号（百の位）の規則に基づき、指定日時に運行する便のみを抽出する
+ * - 午前4時未満は前日営業日として扱う
+ * - 300/400番台: 当日が土休日の場合のみ運行
+ * - 500/600番台: 翌日が土休日の場合のみ運行
+ * - その他(100/200番台等): 毎日運行
+ * @param trips 全便データの配列
+ * @param now 判定基準日時（省略時は現在時刻）
+ * @returns 当日運行する便データの配列
+ */
 export function getTodayTrips(trips: BusTrip[], now: Date = new Date()): BusTrip[] {
-  // 午前4時より前は「前日の深夜営業」として扱う
   const serviceDate = new Date(now);
   if (serviceDate.getHours() < 4) {
     serviceDate.setDate(serviceDate.getDate() - 1);
@@ -104,11 +129,8 @@ export function getTodayTrips(trips: BusTrip[], now: Date = new Date()): BusTrip
     const num = Number(trip.trainNumber);
     const hundreds = Math.floor(num / 100);
 
-    // 300・400番台は当日が土休日のときのみ運行
     if (hundreds === 3 || hundreds === 4) return isTodayHoliday;
-    // 500・600番台は翌日が土休日のときのみ運行（翌平日運休）
     if (hundreds === 5 || hundreds === 6) return isTomorrowHoliday;
-    // 100・200番台（それ以外）は毎日運行
     return true;
   });
 }

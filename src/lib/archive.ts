@@ -1,28 +1,52 @@
-// src/lib/archive.ts
+// --- Imports ---
 import { zipSync, unzipSync, strToU8, strFromU8, type Zippable } from "fflate";
 import { encode as encodeAvif } from "@jsquash/avif";
 import { createOggEncoder } from "wasm-media-encoders";
 import type { RoutePreset, ImageAsset, AudioAsset } from "./preset";
 
-// エディタおよび再生時にメモリ上で保持する実ファイルデータ
+// --- Types ---
+
+/** エディタおよび再生時にメモリ上で保持する展開済みアーカイブデータ */
 export interface LoadedArchive {
   preset: RoutePreset;
   timetableCsv: string;
-  imageBlobs: Record<string, Uint8Array>; // fileName ("xxx.avif") -> バイナリ
-  imageUrls: Record<string, string>;      // hashId -> プレビュー・描画用 Object URL
-  audioBlobs: Record<string, Uint8Array>; // fileName ("xxx.opus") -> バイナリ
-  audioUrls: Record<string, string>;      // hashId -> 再生用 Object URL
+  /** fileName ("xxx.avif") から画像バイナリへのマップ */
+  imageBlobs: Record<string, Uint8Array>;
+  /** hashId からプレビュー・描画用 Object URL へのマップ */
+  imageUrls: Record<string, string>;
+  /** fileName ("xxx.opus") から音声バイナリへのマップ */
+  audioBlobs: Record<string, Uint8Array>;
+  /** hashId から再生用 Object URL へのマップ */
+  audioUrls: Record<string, string>;
 }
 
+// --- Internal Helpers ---
+
+/**
+ * Uint8Arrayをブラウザ標準のBlobオブジェクトへ安全に変換する
+ * @param bytes 変換元のバイト配列
+ * @param type MIMEタイプ文字列
+ * @returns 生成されたBlobインスタンス
+ */
 function toBlob(bytes: Uint8Array, type?: string): Blob {
   return new Blob([bytes as BlobPart], type ? { type } : undefined);
 }
 
+/**
+ * アセット用の16文字のランダムIDを生成する
+ * @returns 16文字の英数字ID
+ */
 function generateShortId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
-// 1. 画像を登録
+// --- Asset Processing Functions ---
+
+/**
+ * 任意の画像ファイルを透過維持のままAVIFへ変換し、アセット情報とバイナリを返す
+ * @param file 入力された画像ファイル
+ * @returns ハッシュID、アセットメタデータ、AVIFバイナリ、Object URL
+ */
 export async function processImageToAvif(file: File): Promise<{
   hashId: string;
   asset: ImageAsset;
@@ -59,7 +83,11 @@ export async function processImageToAvif(file: File): Promise<{
   };
 }
 
-// 2. 音声を登録
+/**
+ * 任意の音声ファイル（WAV/FLAC等）をOgg Opusへ変換し、アセット情報とバイナリを返す
+ * @param file 入力された音声ファイル
+ * @returns ハッシュID、アセットメタデータ、Opusバイナリ、Object URL
+ */
 export async function processAudioToOpus(file: File): Promise<{
   hashId: string;
   asset: AudioAsset;
@@ -68,7 +96,11 @@ export async function processAudioToOpus(file: File): Promise<{
 }> {
   let opusBytes: Uint8Array;
 
-  if (file.name.toLowerCase().endsWith(".opus") || file.type === "audio/opus" || file.type === "audio/ogg") {
+  if (
+    file.name.toLowerCase().endsWith(".opus") ||
+    file.type === "audio/opus" ||
+    file.type === "audio/ogg"
+  ) {
     opusBytes = new Uint8Array(await file.arrayBuffer());
   } else {
     const arrayBuffer = await file.arrayBuffer();
@@ -94,7 +126,9 @@ export async function processAudioToOpus(file: File): Promise<{
     const frameSize = 4096;
     const totalSamples = audioBuffer.length;
     for (let i = 0; i < totalSamples; i += frameSize) {
-      const slice = channelData.map((ch) => ch.subarray(i, Math.min(i + frameSize, totalSamples)));
+      const slice = channelData.map((ch) =>
+        ch.subarray(i, Math.min(i + frameSize, totalSamples)),
+      );
       const encoded = encoder.encode(slice);
       if (encoded.length > 0) chunks.push(new Uint8Array(encoded));
     }
@@ -122,7 +156,15 @@ export async function processAudioToOpus(file: File): Promise<{
   };
 }
 
-// 3. アーカイブ（.mchrn）の書き出し
+// --- Archive I/O Functions ---
+
+/**
+ * プリセットデータ一式を独自アーカイブ形式（.mchrn / ZIP構造）のBlobとして書き出す
+ * - テキスト（preset.json, timetable.csv）は圧縮レベル9で格納
+ * - 画像・音声（AVIF, Opus）は無圧縮（レベル0）で格納
+ * @param data メモリ上のアーカイブデータ一式
+ * @returns 書き出し用のBlobインスタンス
+ */
 export function exportArchiveMchrn(data: LoadedArchive): Blob {
   const files: Zippable = {
     "preset.json": [strToU8(JSON.stringify(data.preset, null, 2)), { level: 9 }],
@@ -140,7 +182,11 @@ export function exportArchiveMchrn(data: LoadedArchive): Blob {
   return toBlob(zipped, "application/octet-stream");
 }
 
-// 4. アーカイブ（.mchrn / .zip）の読み込み
+/**
+ * アーカイブファイル（.mchrn / .zip）を読み込み、メモリ上のデータ構造へ展開する
+ * @param file 読み込むアーカイブファイル
+ * @returns 展開されたアーカイブデータ一式
+ */
 export async function importArchiveZip(file: File): Promise<LoadedArchive> {
   const buffer = new Uint8Array(await file.arrayBuffer());
   const unzipped = unzipSync(buffer);
@@ -166,7 +212,9 @@ export async function importArchiveZip(file: File): Promise<LoadedArchive> {
     const path = `audio/${asset.fileName}`;
     if (unzipped[path]) {
       audioBlobs[asset.fileName] = unzipped[path];
-      audioUrls[hashId] = URL.createObjectURL(toBlob(unzipped[path], "audio/ogg; codecs=opus"));
+      audioUrls[hashId] = URL.createObjectURL(
+        toBlob(unzipped[path], "audio/ogg; codecs=opus"),
+      );
     }
   }
 
