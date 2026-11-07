@@ -93,14 +93,30 @@ export function parseOptDiaCsv(csvText: string): BusTrip[] {
  * @returns 停留所名の配列（出現順）
  */
 export function extractMasterStops(csvText: string): string[] {
-  const trips = parseOptDiaCsv(csvText);
-  const stopSet = new Set<string>();
-  for (const trip of trips) {
-    for (const stop of trip.stops) {
-      stopSet.add(stop.name);
+  const lines = csvText
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.split(","));
+
+  const stopNames: string[] = [];
+
+  for (const cols of lines) {
+    const key = cols[0]?.replace(/^\uFEFF/, "").trim();
+    if (!key || META_KEYS.includes(key) || FOOTER_KEYS.includes(key)) {
+      continue;
+    }
+
+    // 直前の停留所名と同じ場合は、「着と発のペア」とみなして重複追加しない
+    // ※ただし、路線が進んだあとに再び同じ駅に戻ってきた場合は別として追加される
+    const lastStop = stopNames[stopNames.length - 1];
+    if (lastStop !== key) {
+      stopNames.push(key);
+      console.log(key);
+
     }
   }
-  return Array.from(stopSet);
+
+  return stopNames;
 }
 
 /**
