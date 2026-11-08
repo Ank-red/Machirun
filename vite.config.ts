@@ -5,7 +5,10 @@ import packageJson from "./package.json" with { type: 'json' };
 import { resolve } from 'path';
 
 export default defineConfig(({ mode }) => {
-  const isTauri = process.env.TAURI_ENV_PLATFORM !== undefined || process.env.TAURI === 'true';
+  const isTauri =
+    Boolean(process.env.TAURI_ENV_PLATFORM) ||
+    Boolean(process.env.TAURI_ENV_FAMILY) ||
+    process.env.TAURI === "true";
   process.env = { ...process.env, ...loadEnv(mode, process.cwd()) };
   const define: Record<string, string> = {
     APP_TITLE: process.env.VITE_APP_TITLE ? process.env.VITE_APP_TITLE : "Unknown App Title",
