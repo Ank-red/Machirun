@@ -45,9 +45,13 @@ function generateShortId(): string {
 /**
  * 任意の画像ファイルを透過維持のままAVIFへ変換し、アセット情報とバイナリを返す
  * @param file 入力された画像ファイル
+ * @param existingHashId 差し替え時に引き継ぐ既存のハッシュID（省略時は新規生成）
  * @returns ハッシュID、アセットメタデータ、AVIFバイナリ、Object URL
  */
-export async function processImageToAvif(file: File): Promise<{
+export async function processImageToAvif(
+  file: File,
+  existingHashId?: string,
+): Promise<{
   hashId: string;
   asset: ImageAsset;
   binary: Uint8Array;
@@ -71,7 +75,7 @@ export async function processImageToAvif(file: File): Promise<{
     avifBytes = new Uint8Array(encodedBuffer);
   }
 
-  const hashId = generateShortId();
+  const hashId = existingHashId ?? generateShortId();
   const fileName = `${hashId}.avif`;
   const objectUrl = URL.createObjectURL(toBlob(avifBytes, "image/avif"));
 
@@ -86,9 +90,13 @@ export async function processImageToAvif(file: File): Promise<{
 /**
  * 任意の音声ファイル（WAV/FLAC等）をOgg Opusへ変換し、アセット情報とバイナリを返す
  * @param file 入力された音声ファイル
+ * @param existingHashId 差し替え時に引き継ぐ既存のハッシュID（省略時は新規生成）
  * @returns ハッシュID、アセットメタデータ、Opusバイナリ、Object URL
  */
-export async function processAudioToOpus(file: File): Promise<{
+export async function processAudioToOpus(
+  file: File,
+  existingHashId?: string,
+): Promise<{
   hashId: string;
   asset: AudioAsset;
   binary: Uint8Array;
@@ -144,7 +152,7 @@ export async function processAudioToOpus(file: File): Promise<{
     }
   }
 
-  const hashId = generateShortId();
+  const hashId = existingHashId ?? generateShortId();
   const fileName = `${hashId}.opus`;
   const objectUrl = URL.createObjectURL(toBlob(opusBytes, "audio/ogg; codecs=opus"));
 
@@ -187,7 +195,7 @@ export function exportArchiveMchrn(data: LoadedArchive): Blob {
  * @param file 読み込むアーカイブファイル
  * @returns 展開されたアーカイブデータ一式
  */
-export async function importArchiveZip(file: File): Promise<LoadedArchive> {
+export async function importArchiveMchrn(file: File): Promise<LoadedArchive> {
   const buffer = new Uint8Array(await file.arrayBuffer());
   const unzipped = unzipSync(buffer);
 

@@ -16,6 +16,14 @@ export interface AudioAsset {
   originalName: string;
 }
 
+/** 複数の音声アセットを順番に連続再生する音声グループの定義 */
+export interface AudioGroup {
+  /** グループ名 (例: "次停留所案内_瀬河原", "発車チャイム＋注意放送") */
+  name: string;
+  /** 順番に連続再生する AudioAsset のハッシュID配列 */
+  audioIds: string[];
+}
+
 // --- LCD & Layer Types ---
 
 /** ベース画像の上に重ねる透過画像レイヤースロットの定義 */
@@ -62,7 +70,7 @@ export interface ActionStep {
   setStopIndex?: number | "+1";
   /** 各レイヤースロットの番号更新指示（"+1" で進める、null で非表示） */
   setLayers?: Record<string, number | "+1" | null>;
-  /** 再生する AudioAsset のハッシュID */
+  /** 単体の AudioAsset ハッシュID、または "group:<グループ番号>" を指定 */
   playAudioId?: string;
   /** 切り替える LcdGroup の番号 */
   setLcdGroupNo?: number;
@@ -77,6 +85,7 @@ export interface RoutePreset {
   images: Record<string, ImageAsset>;
   layerSlots: Record<string, LayerSlot>;
   audios: Record<string, AudioAsset>;
+  audioGroups?: Record<string, AudioGroup>;
   lcdGroups: Record<string, LcdGroup>;
   actions: ActionStep[];
 }
