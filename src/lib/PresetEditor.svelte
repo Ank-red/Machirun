@@ -1,6 +1,6 @@
 <script lang="ts">
   // --- Imports ---
-  import type { RoutePreset, LcdSlide } from "./preset";
+  import type { RoutePreset, LcdSlide, ActionStep } from "./preset";
   import { extractMasterStops } from "./timetable";
   import {
     processImageToAvif,
@@ -60,6 +60,24 @@
 
   let currentPreviewSlide = $derived<LcdSlide | undefined>(
     preset.lcdGroups[previewGroupNo]?.slides[previewSlideIdx],
+  );
+
+  let activePreviewStepIdx = $state<number | null>(null);
+  let previewAudioPlayer: HTMLAudioElement | null = null;
+
+  let imageOptions = $derived([
+    { value: "", label: "-- 画像を選択 --" },
+    ...Object.entries(preset.images).map(([id, asset]) => ({
+      value: id,
+      label: `${asset.originalName} (${id.slice(0, 6)})`,
+    })),
+  ]);
+
+  let lcdGroupOptions = $derived(
+    Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
+      value: gNo,
+      label: `#${gNo}: ${grp.name}`,
+    })),
   );
 
   // --- Handlers & Methods ---
@@ -271,6 +289,141 @@
   }
 
   /**
+   * 全アクションステップの stepNo を 1 からの連番に振り直す
+   */
+  function renumberActionSteps(): void {
+    preset.actions.forEach((step, idx) => {
+      step.stepNo = idx + 1;
+    });
+  }
+
+  /**
+   * 新しいアクションステップを末尾に追加する
+   */
+  function addActionStep(): void {
+    const isFirst = preset.actions.length === 0;
+    const defaultGroupNo = Number(Object.keys(preset.lcdGroups)[0] ?? 1);
+
+    preset.actions.push({
+      stepNo: preset.actions.length + 1,
+      label: isFirst ? "始発待機" : "次停留所案内",
+      setStopIndex: isFirst ? 0 : undefined,
+      setLcdGroupNo: isFirst ? defaultGroupNo : undefined,
+      setLayers: isFirst ? { stop: 0, fare: 0 } : { stop: "+1" },
+      playAudioId: undefined,
+    });
+  }
+
+  /**
+   * 指定したアクションステップを複製して直後に挿入する
+   * @param idx 複製元のインデックス
+   */
+  function duplicateActionStep(idx: number): void {
+    const source = preset.actions[idx];
+    if (!source) return;
+    const clone: ActionStep = JSON.parse(JSON.stringify(source));
+    preset.actions.splice(idx + 1, 0, clone);
+    renumberActionSteps();
+  }
+
+  /**
+   * アクションステップの順序を上下に入れ替える
+   * @param idx 移動元のインデックス
+   * @param direction -1 で上へ、1 で下へ移動
+   */
+  function moveActionStep(idx: number, direction: -1 | 1): void {
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= preset.actions.length) return;
+    const temp = preset.actions[idx];
+    preset.actions[idx] = preset.actions[targetIdx];
+    preset.actions[targetIdx] = temp;
+    renumberActionSteps();
+  }
+
+  /**
+   * 指定したアクションステップを削除する
+   * @param idx 削除対象のインデックス
+   */
+  function removeActionStep(idx: number): void {
+    preset.actions.splice(idx, 1);
+    renumberActionSteps();
+  }
+
+  /**
+   * レイヤー制御（setLayers）の選択値を更新する
+   * @param step 対象ステップ
+   * @param slotKey レイヤースロットのキー
+   * @param val 選択された操作値（undefinedの場合はキーを削除）
+   */
+  function updateStepLayerValue(
+    step: ActionStep,
+    slotKey: string,
+    val: number | "+1" | null | undefined,
+  ): void {
+    if (!step.setLayers) {
+      step.setLayers = {};
+    }
+    if (val === undefined) {
+      delete step.setLayers[slotKey];
+    } else {
+      step.setLayers[slotKey] = val;
+    }
+  }
+
+  /**
+   * 先頭から指定インデックスまでのステップを順番にシミュレートし、
+   * 右カラムのLCDプレビュー状態と音声再生に反映する
+   * @param targetIdx テスト実行するステップのインデックス
+   */
+  function simulateStepAt(targetIdx: number): void {
+    activePreviewStepIdx = targetIdx;
+
+    const simulatedLayers: Record<string, number> = {};
+    for (const key of Object.keys(preset.layerSlots)) {
+      simulatedLayers[key] = 0;
+    }
+    let simulatedGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
+
+    for (let i = 0; i <= targetIdx; i++) {
+      const step = preset.actions[i];
+      if (!step) continue;
+
+      if (step.setLcdGroupNo !== undefined) {
+        simulatedGroupNo = String(step.setLcdGroupNo);
+      }
+
+      if (step.setLayers) {
+        for (const [slotKey, op] of Object.entries(step.setLayers)) {
+          if (op === "+1") {
+            simulatedLayers[slotKey] = (simulatedLayers[slotKey] ?? 0) + 1;
+          } else if (typeof op === "number") {
+            simulatedLayers[slotKey] = op;
+          } else if (op === null) {
+            simulatedLayers[slotKey] = -1;
+          }
+        }
+      }
+    }
+
+    previewGroupNo = simulatedGroupNo;
+    previewSlideIdx = 0;
+    previewLayerIndices = simulatedLayers;
+
+    // 対象ステップに音声が設定されていれば再生
+    const targetStep = preset.actions[targetIdx];
+    if (previewAudioPlayer) {
+      previewAudioPlayer.pause();
+      previewAudioPlayer = null;
+    }
+    if (targetStep?.playAudioId && audioUrls[targetStep.playAudioId]) {
+      previewAudioPlayer = new Audio(audioUrls[targetStep.playAudioId]);
+      previewAudioPlayer
+        .play()
+        .catch((err) => console.error("Audio Play Error:", err));
+    }
+  }
+
+  /**
    * 現在編集中のプリセット一式を .mchrn アーカイブとしてダウンロード保存する
    */
   function handleExport(): void {
@@ -376,7 +529,7 @@
 
       <!-- タブ1: 基本情報・CSV・画像・音声登録 -->
       {#if activeTab === "base"}
-        <article class="border">
+        <article class="border padding">
           <div class="field label border">
             <input type="text" bind:value={preset.meta.name} />
             <label>プリセット名（路線・方向名）</label>
@@ -438,11 +591,10 @@
 
       <!-- タブ2: レイヤースロット設定 -->
       {#if activeTab === "layers"}
-        <!-- 各レイヤースロットの編集 -->
         {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
-          <article class="border top-margin">
-            <div class="row">
-              <h6 class="max">
+          <article class="border padding top-margin">
+            <div class="row wrap-row">
+              <h6 class="max no-margin">
                 {slot.name} <small>(ID: <code>{slotKey}</code>)</small>
               </h6>
               <label class="checkbox">
@@ -457,7 +609,7 @@
               </button>
             </div>
 
-            <div class="row">
+            <div class="row wrap-row top-margin">
               <button
                 class="small border"
                 onclick={() => {
@@ -485,24 +637,18 @@
             <div class="space"></div>
 
             {#each Object.entries(slot.items) as [no]}
-              <div class="row">
+              <div class="row item-row">
                 <span class="bold">#{no}</span>
                 {#if slot.linkedToCsvStop && masterStops[Number(no)]}
-                  <span class="chip small">{masterStops[Number(no)]}</span>
+                  <span class="chip small stop-chip">
+                    {masterStops[Number(no)]}
+                  </span>
                 {/if}
-                <div class="field border max no-margin">
-                  <Dropdown
-                    bind:value={slot.items[no]}
-                    options={[
-                      { value: "", label: "-- 画像を選択 --" },
-                      ...Object.entries(preset.images).map((img) => ({
-                        value: img[0],
-                        label: `${img[1].originalName} (${img[0].slice(0, 6)})`,
-                      })),
-                    ]}
-                  />
-                  <i>arrow_drop_down</i>
-                </div>
+                <Dropdown
+                  full={true}
+                  bind:value={slot.items[no]}
+                  options={imageOptions}
+                />
                 <button
                   class="small transparent circle"
                   onclick={() => delete slot.items[no]}
@@ -513,49 +659,41 @@
             {/each}
           </article>
         {/each}
+
         <!-- 新規スロット追加フォーム -->
-        <article class="border">
+        <article class="border padding top-margin">
           <h6>新規レイヤースロットの追加</h6>
-          <div>
-            <div class="field label border max">
-              <input type="text" bind:value={newSlotKey} />
-              <label>スロットID (英数字)</label>
-            </div>
-            <div class="field label border max">
-              <input type="text" bind:value={newSlotName} />
-              <label>表示名</label>
-            </div>
-            <div class="space"></div>
-            <button class="primary" onclick={addLayerSlot}>
-              <i>add</i>
-              <span>スロット追加</span>
-            </button>
+          <div class="field label border">
+            <input type="text" bind:value={newSlotKey} />
+            <label>スロットID (英数字)</label>
           </div>
+          <div class="field label border">
+            <input type="text" bind:value={newSlotName} />
+            <label>表示名</label>
+          </div>
+          <div class="space"></div>
+          <button class="primary" onclick={addLayerSlot}>
+            <i>add</i>
+            <span>スロット追加</span>
+          </button>
         </article>
       {/if}
 
       <!-- タブ3: LCDグループのベース画像・表示レイヤー設定 -->
       {#if activeTab === "lcd"}
-        <article class="border">
-          <div class="row">
-            <div class="field label suffix border max no-margin">
-              <select
-                bind:value={previewGroupNo}
-                onchange={() => (previewSlideIdx = 0)}
-              >
-                {#each Object.entries(preset.lcdGroups) as [gNo, grp]}
-                  <option value={gNo}>#{gNo}: {grp.name}</option>
-                {/each}
-              </select>
-              <label>編集するLCDグループ</label>
-              <i>arrow_drop_down</i>
-            </div>
-
+        <article class="border padding">
+          <div class="row wrap-row">
+            <Dropdown
+              full={true}
+              label="編集するLCDグループ"
+              bind:value={previewGroupNo}
+              options={lcdGroupOptions}
+              onchange={() => (previewSlideIdx = 0)}
+            />
             <button class="primary" onclick={addLcdGroup}>
               <i>add</i>
-              <span>新規グループ</span>
+              <span>新規</span>
             </button>
-
             {#if Object.keys(preset.lcdGroups).length > 1}
               <button
                 class="border error-text"
@@ -569,13 +707,12 @@
           {#if preset.lcdGroups[previewGroupNo]}
             {@const currentGroup = preset.lcdGroups[previewGroupNo]}
             <div class="space"></div>
-            <div>
-              <div class="field label border max no-margin">
-                <input type="text" bind:value={currentGroup.name} />
-                <label>グループ名</label>
-              </div>
-              <div class="space"></div>
-              <label class="checkbox">
+            <div class="field label border no-margin">
+              <input type="text" bind:value={currentGroup.name} />
+              <label>グループ名</label>
+            </div>
+            <div class="row wrap-row top-margin">
+              <label class="checkbox max">
                 <input type="checkbox" bind:checked={currentGroup.loop} />
                 <span>スライドをループ再生する</span>
               </label>
@@ -592,18 +729,18 @@
           {@const currentGroup = preset.lcdGroups[previewGroupNo]}
           {#each currentGroup.slides as slide, sIdx}
             <article
-              class="border top-margin"
+              class="border padding top-margin"
               class:fill={previewSlideIdx === sIdx}
               onclick={() => (previewSlideIdx = sIdx)}
             >
-              <div class="row">
-                <h6 class="max">
+              <div class="row wrap-row">
+                <h6 class="max no-margin">
                   スライド #{sIdx + 1}
                   {#if previewSlideIdx === sIdx}
                     <span class="chip small primary">プレビュー中</span>
                   {/if}
                 </h6>
-                <div class="field label border small no-margin">
+                <div class="field label border small no-margin number-box">
                   <input type="number" min="1" bind:value={slide.durationSec} />
                   <label>表示秒数</label>
                 </div>
@@ -620,23 +757,21 @@
                 {/if}
               </div>
 
-              <div class="field label suffix border">
-                <select bind:value={slide.baseImageId}>
-                  <option value="">-- ベース画像を選択 --</option>
-                  {#each Object.entries(preset.images) as [imgId, asset]}
-                    <option value={imgId}>
-                      {asset.originalName} ({imgId.slice(0, 6)})
-                    </option>
-                  {/each}
-                </select>
-                <label>ベース画像</label>
-                <i>arrow_drop_down</i>
-              </div>
+              <div class="space"></div>
+              <Dropdown
+                full={true}
+                label="ベース画像"
+                bind:value={slide.baseImageId}
+                options={imageOptions}
+              />
 
-              <p class="bold">重ねるレイヤー（チェック順＝下から重ねる順）:</p>
+              <div class="space"></div>
+              <p class="bold no-margin">
+                重ねるレイヤー（チェック順＝下から重ねる順）:
+              </p>
               {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
                 {@const isVisible = slide.visibleLayers.includes(slotKey)}
-                <div class="row">
+                <div class="row wrap-row">
                   <label class="checkbox max">
                     <input
                       type="checkbox"
@@ -652,7 +787,7 @@
                   </label>
 
                   {#if isVisible}
-                    <div class="field label border small no-margin">
+                    <div class="field label border small no-margin number-box">
                       <input
                         type="number"
                         min="0"
@@ -665,7 +800,7 @@
                             e.currentTarget.value,
                           )}
                       />
-                      <label>番号固定(任意)</label>
+                      <label>番号固定</label>
                     </div>
                   {/if}
                 </div>
@@ -674,11 +809,152 @@
           {/each}
         {/if}
       {/if}
+
+      <!-- タブ4: アクションステップ設定 -->
+      {#if activeTab === "actions"}
+        <article class="border padding">
+          <div class="row wrap-row">
+            <h6 class="max no-margin">
+              アクションステップ一覧 ({preset.actions.length}件)
+            </h6>
+            <button class="primary" onclick={addActionStep}>
+              <i>add</i>
+              <span>ステップ追加</span>
+            </button>
+          </div>
+        </article>
+
+        {#each preset.actions as step, idx}
+          <article
+            class="border padding top-margin"
+            class:fill={activePreviewStepIdx === idx}
+          >
+            <!-- 上段：番号と操作ボタン群 -->
+            <div class="row wrap-row">
+              <span class="chip small bold">#{step.stepNo}</span>
+              <div class="max"></div>
+              <button class="small border" onclick={() => simulateStepAt(idx)}>
+                <i>play_circle</i>
+                <span>テスト</span>
+              </button>
+              <button
+                class="small transparent circle"
+                disabled={idx === 0}
+                onclick={() => moveActionStep(idx, -1)}
+              >
+                <i>arrow_upward</i>
+              </button>
+              <button
+                class="small transparent circle"
+                disabled={idx === preset.actions.length - 1}
+                onclick={() => moveActionStep(idx, 1)}
+              >
+                <i>arrow_downward</i>
+              </button>
+              <button
+                class="small transparent circle"
+                onclick={() => duplicateActionStep(idx)}
+              >
+                <i>content_copy</i>
+              </button>
+              <button
+                class="small transparent circle error-text"
+                onclick={() => removeActionStep(idx)}
+              >
+                <i>delete</i>
+              </button>
+            </div>
+
+            <!-- 中段：ステップ表示名 -->
+            <div class="field label border top-margin no-bottom-margin">
+              <input type="text" bind:value={step.label} />
+              <label>ステップ表示名（例: 次停留所案内 / 停車中）</label>
+            </div>
+
+            <!-- 下段1：ダイヤ停留所・LCDグループ・音声の切り替え -->
+            <div class="grid top-margin">
+              <div class="s12 m6">
+                <Dropdown
+                  full={true}
+                  label="車載器ダイヤ停留所"
+                  bind:value={step.setStopIndex}
+                  options={[
+                    { value: undefined, label: "変更なし" },
+                    { value: "+1", label: "次の停留所へ (+1)" },
+                    ...masterStops.map((stopName, sIdx) => ({
+                      value: sIdx,
+                      label: `#${sIdx}: ${stopName}`,
+                    })),
+                  ]}
+                />
+              </div>
+
+              <div class="s12 m6">
+                <Dropdown
+                  full={true}
+                  label="LCDグループ切替"
+                  bind:value={step.setLcdGroupNo}
+                  options={[
+                    { value: undefined, label: "変更なし" },
+                    ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
+                      value: Number(gNo),
+                      label: `#${gNo}: ${grp.name}`,
+                    })),
+                  ]}
+                />
+              </div>
+
+              <div class="s12">
+                <Dropdown
+                  full={true}
+                  label="再生する音声"
+                  bind:value={step.playAudioId}
+                  options={[
+                    { value: undefined, label: "再生しない" },
+                    ...Object.entries(preset.audios).map(([audId, asset]) => ({
+                      value: audId,
+                      label: `${asset.originalName} (${audId.slice(0, 6)})`,
+                    })),
+                  ]}
+                />
+              </div>
+            </div>
+
+            <!-- 下段2：各レイヤースロットの番号更新 -->
+            <div class="space"></div>
+            <p class="bold no-margin">レイヤー番号の更新:</p>
+            <div class="grid">
+              {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
+                <div class="s12 m6">
+                  <Dropdown
+                    full={true}
+                    label={`${slot.name} (${slotKey})`}
+                    value={step.setLayers?.[slotKey]}
+                    onchange={(val) => updateStepLayerValue(step, slotKey, val)}
+                    options={[
+                      { value: undefined, label: "変更なし (維持)" },
+                      { value: "+1", label: "次の番号へ (+1)" },
+                      { value: null, label: "非表示にする" },
+                      ...Object.keys(slot.items).map((itemNo) => ({
+                        value: Number(itemNo),
+                        label:
+                          slot.linkedToCsvStop && masterStops[Number(itemNo)]
+                            ? `#${itemNo} (${masterStops[Number(itemNo)]})`
+                            : `#${itemNo} に指定`,
+                      })),
+                    ]}
+                  />
+                </div>
+              {/each}
+            </div>
+          </article>
+        {/each}
+      {/if}
     </div>
 
     <!-- 右カラム：常時表示のLCDリアルタイムプレビュー -->
     <div class="s12 m5">
-      <article class="border">
+      <article class="border padding">
         <div class="row">
           <h6 class="max">LCDリアルタイムプレビュー</h6>
           <button
@@ -691,6 +967,8 @@
             <span>{isLoopPreviewing ? "ループ停止" : "ループ再生テスト"}</span>
           </button>
         </div>
+
+        <div class="space"></div>
 
         <LcdScreen
           slide={currentPreviewSlide}
@@ -731,3 +1009,39 @@
     </div>
   </div>
 </section>
+
+<style>
+  /* グリッド要素の横幅突き抜け防止 */
+  .grid > * {
+    min-width: 0;
+  }
+
+  /* 折り返し可能な横並び行 */
+  .wrap-row {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  /* レイヤー番号行の整列 */
+  .item-row {
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    min-width: 0;
+  }
+
+  .stop-chip {
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .number-box {
+    width: 6.5rem;
+  }
+
+  /* 長いファイル名リストの折り返し */
+  ul {
+    word-break: break-all;
+  }
+</style>
