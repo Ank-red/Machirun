@@ -651,7 +651,7 @@
         if (sIdx === 0) {
           generated.push({
             stepNo: 1,
-            label: `${stopName} (始発待機)`,
+            label: `業務放送`,
             setStopIndex: 0,
             setLcdGroupNo: macroRunningGroupNo,
             setLayers: { ...initLayers },
@@ -659,7 +659,7 @@
         } else {
           generated.push({
             stepNo: 1,
-            label: `次停留所: ${stopName}`,
+            label: `案内: ${stopName}`,
             setStopIndex: "+1",
             setLayers: { ...advanceLayers },
           });
@@ -670,7 +670,7 @@
         if (sIdx === 0) {
           generated.push({
             stepNo: 1,
-            label: `${stopName} (始発・停車中)`,
+            label: `${stopName} (ドア開)`,
             setStopIndex: 0,
             setLcdGroupNo: macroStoppingGroupNo ?? macroRunningGroupNo,
             setLayers: { ...initLayers },
@@ -678,27 +678,27 @@
           });
           generated.push({
             stepNo: 1,
-            label: `${stopName} (ドア閉め・発車待ち)`,
+            label: `${stopName} (ドア閉)`,
             playAudioId: macroCloseAudioId,
           });
         } else {
           generated.push({
             stepNo: 1,
-            label: `次案内: ${stopName} (走行中)`,
+            label: `案内: ${stopName}`,
             setStopIndex: "+1",
             setLcdGroupNo: macroRunningGroupNo,
             setLayers: { ...advanceLayers },
           });
           generated.push({
             stepNo: 1,
-            label: `${stopName} (到着・停車中)`,
+            label: `${stopName} (ドア開)`,
             setLcdGroupNo: macroStoppingGroupNo,
             playAudioId: macroArriveAudioId,
           });
           if (sIdx < masterStops.length - 1) {
             generated.push({
               stepNo: 1,
-              label: `${stopName} (ドア閉め・発車待ち)`,
+              label: `${stopName} (ドア閉)`,
               playAudioId: macroCloseAudioId,
             });
           }
@@ -833,7 +833,7 @@
 
   <!-- 上部バー：タイトルとアーカイブ入出力 -->
   <nav class="top-nav">
-    <h5 class="max">停留所プリセットエディタ</h5>
+    <h5 class="max">停留所エディタ</h5>
     <FileButton
       label="読み込み"
       icon="folder_open"

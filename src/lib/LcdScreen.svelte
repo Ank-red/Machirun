@@ -138,7 +138,7 @@
     <div class="lcd-waiting">
       <h5>Machirun LCD 待機中...</h5>
       <p class="small-text">
-        車載器またはプリセットエディタで画像を設定・選択してください
+        車載器または停留所エディタで画像を設定・選択してください
       </p>
     </div>
   {/if}
