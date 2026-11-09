@@ -173,7 +173,10 @@ export async function processAudioToOpus(
  * @param data メモリ上のアーカイブデータ一式
  * @returns 書き出し用のBlobインスタンス
  */
-export function exportArchiveMchrn(data: LoadedArchive): Blob {
+export function exportArchiveMchrn(data: LoadedArchive): {
+  blob: Blob,
+  Unit8Array: Uint8Array<ArrayBuffer>
+} {
   const files: Zippable = {
     "preset.json": [strToU8(JSON.stringify(data.preset, null, 2)), { level: 9 }],
     "timetable.csv": [strToU8(data.timetableCsv), { level: 9 }],
@@ -187,7 +190,7 @@ export function exportArchiveMchrn(data: LoadedArchive): Blob {
   }
 
   const zipped = zipSync(files);
-  return toBlob(zipped, "application/octet-stream");
+  return { blob: toBlob(zipped, "application/octet-stream"), Unit8Array: zipped };
 }
 
 /**

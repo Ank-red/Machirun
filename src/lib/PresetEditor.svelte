@@ -1,5 +1,7 @@
 <script lang="ts">
   // --- Imports ---
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import type { RoutePreset, LcdSlide, ActionStep } from "./preset";
   import { extractMasterStops } from "./timetable";
   import {
@@ -8,9 +10,57 @@
     exportArchiveMchrn,
     importArchiveMchrn,
   } from "./archive";
+  import {
+    broadcastLcdState,
+    broadcastLcdAssets,
+    lcdChannel,
+    type LcdSyncMessage,
+  } from "./lcdChannel";
   import LcdScreen from "./LcdScreen.svelte";
   import FileButton from "./FileButton.svelte";
   import Dropdown from "./Dropdown.svelte";
+
+  // --- Constants ---
+  const isTauri = "__TAURI_INTERNALS__" in window;
+
+  let {
+    preset = $bindable<RoutePreset>({
+      meta: { name: "新規プリセット" },
+      images: {},
+      layerSlots: {
+        stop: { name: "停留所名レイヤー", linkedToCsvStop: true, items: {} },
+        fare: { name: "運賃表レイヤー", items: {} },
+      },
+      audios: {},
+      audioGroups: {},
+      lcdGroups: {
+        "1": {
+          name: "通常走行ループ",
+          loop: true,
+          slides: [
+            {
+              baseImageId: "",
+              durationSec: 8,
+              visibleLayers: ["stop", "fare"],
+            },
+          ],
+        },
+      },
+      actions: [],
+    }),
+    timetableCsv = $bindable(""),
+    imageBlobs = $bindable<Record<string, Uint8Array>>({}),
+    imageUrls = $bindable<Record<string, string>>({}),
+    audioBlobs = $bindable<Record<string, Uint8Array>>({}),
+    audioUrls = $bindable<Record<string, string>>({}),
+  }: {
+    preset?: RoutePreset;
+    timetableCsv?: string;
+    imageBlobs?: Record<string, Uint8Array>;
+    imageUrls?: Record<string, string>;
+    audioBlobs?: Record<string, Uint8Array>;
+    audioUrls?: Record<string, string>;
+  } = $props();
 
   // --- State & Derived ---
   let activeTab = $state<"base" | "layers" | "lcd" | "actions">("base");
@@ -18,36 +68,9 @@
   let newSlotName = $state("");
   let isLoopPreviewing = $state(false);
 
-  let preset = $state<RoutePreset>({
-    meta: { name: "新規プリセット" },
-    images: {},
-    layerSlots: {
-      stop: { name: "停留所名レイヤー", linkedToCsvStop: true, items: {} },
-      fare: { name: "運賃表レイヤー", items: {} },
-    },
-    audios: {},
-    audioGroups: {},
-    lcdGroups: {
-      "1": {
-        name: "通常走行ループ",
-        loop: true,
-        slides: [
-          { baseImageId: "", durationSec: 8, visibleLayers: ["stop", "fare"] },
-        ],
-      },
-    },
-    actions: [],
-  });
-
-  let timetableCsv = $state("");
   let masterStops = $derived(
     timetableCsv ? extractMasterStops(timetableCsv) : [],
   );
-
-  let imageBlobs = $state<Record<string, Uint8Array>>({});
-  let imageUrls = $state<Record<string, string>>({});
-  let audioBlobs = $state<Record<string, Uint8Array>>({});
-  let audioUrls = $state<Record<string, string>>({});
 
   let isRegisteringImage = $state(false);
   let isRegisteringAudio = $state(false);
@@ -160,6 +183,40 @@
   }
 
   /**
+   * 指定した画像アセットを削除し、参照しているレイヤーやスライドからも除外する
+   * @param hashId 削除対象の画像ハッシュID
+   */
+  function handleImageRemove(hashId: string): void {
+    const asset = preset.images[hashId];
+    if (!asset) return;
+
+    if (imageUrls[hashId]) {
+      URL.revokeObjectURL(imageUrls[hashId]);
+      delete imageUrls[hashId];
+    }
+    delete imageBlobs[asset.fileName];
+    delete preset.images[hashId];
+
+    // レイヤースロット内の参照をクリア
+    for (const slot of Object.values(preset.layerSlots)) {
+      for (const [no, imgId] of Object.entries(slot.items)) {
+        if (imgId === hashId) {
+          slot.items[no] = "";
+        }
+      }
+    }
+
+    // LCDスライドのベース画像参照をクリア
+    for (const grp of Object.values(preset.lcdGroups)) {
+      for (const slide of grp.slides) {
+        if (slide.baseImageId === hashId) {
+          slide.baseImageId = "";
+        }
+      }
+    }
+  }
+
+  /**
    * 選択された音声ファイルをOpusへ一括変換し、プリセットに登録する
    * @param files 選択されたFileList
    */
@@ -204,6 +261,36 @@
       console.error(`音声差し替えエラー (${file.name}):`, err);
     } finally {
       isRegisteringAudio = false;
+    }
+  }
+
+  /**
+   * 指定した音声アセットを削除し、音声グループやアクションステップからも除外する
+   * @param hashId 削除対象の音声ハッシュID
+   */
+  function handleAudioRemove(hashId: string): void {
+    const asset = preset.audios[hashId];
+    if (!asset) return;
+
+    if (audioUrls[hashId]) {
+      URL.revokeObjectURL(audioUrls[hashId]);
+      delete audioUrls[hashId];
+    }
+    delete audioBlobs[asset.fileName];
+    delete preset.audios[hashId];
+
+    // 音声グループ内の参照を除外
+    if (preset.audioGroups) {
+      for (const grp of Object.values(preset.audioGroups)) {
+        grp.audioIds = grp.audioIds.filter((id) => id !== hashId);
+      }
+    }
+
+    // アクションステップの参照をクリア
+    for (const step of preset.actions) {
+      if (step.playAudioId === hashId) {
+        step.playAudioId = undefined;
+      }
     }
   }
 
@@ -627,8 +714,8 @@
   /**
    * 現在編集中のプリセット一式を .mchrn アーカイブとしてダウンロード保存する
    */
-  function handleExport(): void {
-    const blob = exportArchiveMchrn({
+  async function handleExport(): Promise<boolean> {
+    const dataMchrn = exportArchiveMchrn({
       preset,
       timetableCsv,
       imageBlobs,
@@ -636,10 +723,31 @@
       audioBlobs,
       audioUrls,
     });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${preset.meta.name || "preset"}.mchrn`;
-    a.click();
+    if (isTauri) {
+      try {
+        // Rust側のネイティブ保存ダイアログを呼び出し
+        const savedPath = await invoke<string>("save_mchrn_file", {
+          defaultName: `${preset.meta.name || "preset"}.mchrn`,
+          data: Array.from(dataMchrn.Unit8Array),
+        });
+        console.log("Saved to:", savedPath);
+        return true;
+      } catch (e) {
+        if (e !== "Cancelled") {
+          console.error("Save failed:", e);
+        }
+        return false;
+      }
+    } else {
+      // ブラウザ環境向けのフォールバック（従来の方法）
+      const url = URL.createObjectURL(dataMchrn.blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${preset.meta.name || "preset"}.mchrn`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return true;
+    }
   }
 
   /**
@@ -682,6 +790,37 @@
 
     return () => clearTimeout(timer);
   });
+
+  $effect(() => {
+    broadcastLcdAssets(imageBlobs);
+  });
+
+  $effect(() => {
+    broadcastLcdState(
+      preset,
+      previewGroupNo,
+      previewSlideIdx,
+      previewLayerIndices,
+      imageBlobs,
+    );
+  });
+
+  onMount(() => {
+    const handleSyncRequest = (event: MessageEvent<LcdSyncMessage>) => {
+      if (event.data.type === "request-sync") {
+        broadcastLcdAssets(imageBlobs);
+        broadcastLcdState(
+          preset,
+          previewGroupNo,
+          previewSlideIdx,
+          previewLayerIndices,
+          imageBlobs,
+        );
+      }
+    };
+    lcdChannel.addEventListener("message", handleSyncRequest);
+    return () => lcdChannel.removeEventListener("message", handleSyncRequest);
+  });
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -694,7 +833,7 @@
 
   <!-- 上部バー：タイトルとアーカイブ入出力 -->
   <nav class="top-nav">
-    <h5 class="max">プリセットエディタ（試験用・未実装です）</h5>
+    <h5 class="max">停留所プリセットエディタ</h5>
     <FileButton
       label="読み込み"
       icon="folder_open"
@@ -775,6 +914,13 @@
                 disabled={isRegisteringImage}
                 onselect={(files) => handleImageReplace(hashId, files)}
               />
+              <button
+                class="small transparent circle error-text"
+                onclick={() => handleImageRemove(hashId)}
+                title="画像を削除"
+              >
+                <i>delete</i>
+              </button>
             </div>
           {/each}
 
@@ -807,6 +953,13 @@
                 disabled={isRegisteringAudio}
                 onselect={(files) => handleAudioReplace(hashId, files)}
               />
+              <button
+                class="small transparent circle error-text"
+                onclick={() => handleAudioRemove(hashId)}
+                title="音声を削除"
+              >
+                <i>delete</i>
+              </button>
             </div>
           {/each}
 
