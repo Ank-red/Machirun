@@ -7,7 +7,6 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd());
   const define: Record<string, string> = {
     APP_TITLE: env.VITE_APP_TITLE || "Machirun",
-    APP_SHORT_TITLE: env.VITE_APP_SHORT_TITLE || "Machirun",
     APP_URL: env.VITE_APP_URL || "",
     APP_VERSION: packageJson.version
       ? `${packageJson.version}${mode === "development" ? "-DEV" : ""}`
