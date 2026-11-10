@@ -18,6 +18,7 @@
   import PresetEditor from "./lib/PresetEditor.svelte";
 
   const isTauri = "__TAURI_INTERNALS__" in window;
+  const isDev = import.meta.env.DEV;
 
   interface LoadedPresetItem extends LoadedArchive {
     id: string;
@@ -55,6 +56,7 @@
   });
   let now = $state<Date>(new Date());
   let activeAudioPlayer: HTMLAudioElement | null = null;
+  let isMuted = $state<boolean>(false);
 
   // --- Release Download URLs (Web Only) ---
   let releaseUrls = $state({
@@ -127,6 +129,7 @@
   }
 
   function playStepAudio(targetId?: string): void {
+    if (isMuted) return;
     stopAudioPlayback();
     const { urls, firstFileName } = resolveAudioSequence(
       preset,
@@ -282,6 +285,9 @@
   });
 
   onMount(() => {
+    console.log(import.meta.env.DEV);
+    console.table(import.meta.env);
+
     if (!isTauri) {
       fetchLatestReleaseUrls();
       return;
@@ -307,7 +313,7 @@
   });
 </script>
 
-{#if !isTauri}
+{#if !isTauri && !isDev}
   <!-- Webブラウザで開かれた場合はデスクトップ版のダウンロード案内のみ表示 -->
   <Header title="Machirun Driver" />
   <main class="responsive padding">
@@ -358,6 +364,13 @@
         onchange={resetOperationState}
       />
     {/if}
+    <button
+      class="border circle"
+      onclick={() => (isMuted = !isMuted)}
+      title={isMuted ? "ミュート解除" : "ミュート"}
+    >
+      <i>{isMuted ? "volume_off" : "volume_up"}</i>
+    </button>
     <FileButton
       label="mchrn追加読込"
       icon="folder_open"
