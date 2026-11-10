@@ -3,136 +3,14 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{AppHandle, Emitter};
 use tiny_http::{Header, Response, Server};
 
-#[derive(Clone, Serialize, Deserialize, Default)]
-struct LcdServerState {
-    preset: Option<serde_json::Value>,
-    group_no: String,
-    slide_idx: usize,
-    layer_indices: HashMap<String, serde_json::Value>,
-    image_blobs: HashMap<String, Vec<u8>>,
-    playing_audio_file: String,
-    audio_nonce: u64,
-}
-
-lazy_static! {
-    static ref LCD_STATE: Arc<Mutex<LcdServerState>> =
-        Arc::new(Mutex::new(LcdServerState::default()));
-    static ref AUDIO_BLOBS_CACHE: Arc<Mutex<HashMap<String, Vec<u8>>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-}
-
-// 1. 状態・画像・音声トリガーを同期する超軽量コマンド（頻繁に呼ばれる）
-#[tauri::command]
-fn sync_lcd_to_rust(state: LcdServerState) {
-    if let Ok(mut locked) = LCD_STATE.lock() {
-        *locked = state;
-    }
-}
-
-// 2. 音声バイナリ一式を初期登録するコマンド（mchrn読み込み時に1回だけ呼ぶ）
-#[tauri::command]
-fn register_audio_blobs(blobs: HashMap<String, Vec<u8>>) {
-    if let Ok(mut locked) = AUDIO_BLOBS_CACHE.lock() {
-        *locked = blobs;
-    }
-}
-
-#[tauri::command]
-fn save_mchrn_file(default_name: String, data: Vec<u8>) -> Result<String, String> {
-    let file = rfd::FileDialog::new()
-        .set_file_name(&default_name)
-        .add_filter("Machirun Preset", &["mchrn"])
-        .save_file();
-
-    if let Some(path) = file {
-        match fs::write(&path, data) {
-            Ok(_) => Ok(path.to_string_lossy().to_string()),
-            Err(e) => Err(e.to_string()),
-        }
-    } else {
-        Err("Cancelled".to_string())
-    }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    thread::spawn(|| {
-        println!("[LCD Server] Attempting to bind to 127.0.0.1:14280...");
-        let server = match Server::http("127.0.0.1:14280") {
-            Ok(s) => {
-                println!("[LCD Server] Successfully bound to 127.0.0.1:14280!");
-                s
-            }
-            Err(e) => {
-                eprintln!("[LCD Server] BIND ERROR: {}", e);
-                return;
-            }
-        };
-
-        for request in server.incoming_requests() {
-            let url = request.url().to_string();
-            println!("[LCD Server] Request received: {}", url);
-
-            if url.starts_with("/api/state") {
-                let locked = LCD_STATE.lock().unwrap();
-                let json = match serde_json::to_string(&*locked) {
-                    Ok(j) => j,
-                    Err(e) => {
-                        eprintln!("[LCD Server] JSON serialize error: {}", e);
-                        "{}".to_string()
-                    }
-                };
-                let response = Response::from_string(json)
-                    .with_header(
-                        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
-                    )
-                    .with_header(
-                        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
-                    );
-                let _ = request.respond(response);
-            } else if url.starts_with("/image/") {
-                let filename = url.strip_prefix("/image/").unwrap_or("");
-                let locked = LCD_STATE.lock().unwrap();
-                if let Some(bytes) = locked.image_blobs.get(filename) {
-                    let response = Response::from_data(bytes.clone())
-                        .with_header(
-                            Header::from_bytes(&b"Content-Type"[..], &b"image/avif"[..]).unwrap(),
-                        )
-                        .with_header(
-                            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
-                                .unwrap(),
-                        );
-                    let _ = request.respond(response);
-                } else {
-                    let response = Response::empty(404);
-                    let _ = request.respond(response);
-                }
-            } else if url.starts_with("/audio/") {
-                let filename = url.strip_prefix("/audio/").unwrap_or("");
-                let locked = AUDIO_BLOBS_CACHE.lock().unwrap();
-                if let Some(bytes) = locked.get(filename) {
-                    let response = Response::from_data(bytes.clone())
-                        .with_header(
-                            Header::from_bytes(&b"Content-Type"[..], &b"audio/ogg"[..]).unwrap(),
-                        )
-                        .with_header(
-                            Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..])
-                                .unwrap(),
-                        );
-                    let _ = request.respond(response);
-                } else {
-                    let response = Response::empty(404);
-                    let _ = request.respond(response);
-                }
-            } else {
-                // OBSブラウザソース用のLCD描画HTMLクライアント
-                let html = r#"<!DOCTYPE html>
+const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
@@ -160,17 +38,11 @@ pub fn run() {
   </style>
 </head>
 <body>
-  <div id="lcd-stage">
-    <div class="waiting">
-      <h3>Machirun OBS LCD 待機中...</h3>
-      <p>車載器からの接続を待っています</p>
-    </div>
-  </div>
+  <div id="lcd-stage"></div>
   <audio id="obs-audio" style="display:none;"></audio>
 
   <script>
-    let objectUrlCache = {};
-    let audioUrlCache = {};
+    const objectUrlCache = {};
     let lastAudioNonce = 0;
 
     async function updateLcd() {
@@ -178,84 +50,68 @@ pub fn run() {
         const res = await fetch('/api/state');
         if (!res.ok) return;
         const data = await res.json();
-        
+
+        const stage = document.getElementById('lcd-stage');
         const preset = data.preset;
+
+        if (!preset || !preset.lcdGroups) {
+          stage.innerHTML = '';
+          return;
+        }
+
         const groupNo = data.group_no || "1";
         const slideIdx = data.slide_idx || 0;
         const layerIndices = data.layer_indices || {};
         const imageBlobs = data.image_blobs || {};
-        const audioBlobs = data.audio_blobs || {};
         const playingFile = data.playing_audio_file;
         const nonce = data.audio_nonce || 0;
 
-        if (!preset || !preset.lcdGroups) return;
-
-        // 画像キャッシュ
         for (const [filename, byteArr] of Object.entries(imageBlobs)) {
           if (!objectUrlCache[filename]) {
-            const u8 = new Uint8Array(byteArr);
-            const blob = new Blob([u8], { type: 'image/avif' });
+            const blob = new Blob([new Uint8Array(byteArr)], { type: 'image/avif' });
             objectUrlCache[filename] = URL.createObjectURL(blob);
           }
         }
-        // 音声キャッシュ
-        for (const [filename, byteArr] of Object.entries(audioBlobs)) {
-          if (!audioUrlCache[filename]) {
-            audioUrlCache[filename] = URL.createObjectURL(new Blob([new Uint8Array(byteArr)], { type: 'audio/ogg' }));
-          }
-        }
 
-        // 音声の自動再生トリガー検知
         if (playingFile && nonce !== lastAudioNonce) {
           lastAudioNonce = nonce;
-          const audioUrl = audioUrlCache[playingFile] || `/audio/${encodeURIComponent(playingFile)}`;
           const audioElement = document.getElementById('obs-audio');
-          audioElement.src = audioUrl;
-          audioElement.play().catch(e => console.error("Audio playback blocked/failed:", e));
+          audioElement.src = `/audio/${encodeURIComponent(playingFile)}?t=${nonce}`;
+          audioElement.play().catch(e => console.error("Audio playback failed:", e));
         }
 
         const group = preset.lcdGroups[groupNo];
-        if (!group || !group.slides || !group.slides[slideIdx]) return;
+        if (!group || !group.slides || !group.slides[slideIdx]) {
+          stage.innerHTML = '';
+          return;
+        }
         const slide = group.slides[slideIdx];
-
-        const stage = document.getElementById('lcd-stage');
         let html = '';
 
-        if (slide.baseImageId && preset.images && preset.images[slide.baseImageId]) {
+        if (slide.baseImageId && preset.images?.[slide.baseImageId]) {
           const imgAsset = preset.images[slide.baseImageId];
           const url = objectUrlCache[imgAsset.fileName];
-          if (url) {
-            html += `<img src="${url}" class="lcd-layer" />`;
-          }
+          if (url) html += `<img src="${url}" class="lcd-layer" />`;
         }
 
         if (slide.visibleLayers && preset.layerSlots) {
           for (const slotKey of slide.visibleLayers) {
             const slot = preset.layerSlots[slotKey];
-            if (!slot || !slot.items) continue;
+            if (!slot?.items) continue;
 
-            const overrideIdx = slide.layerOverrides ? slide.layerOverrides[slotKey] : undefined;
+            const overrideIdx = slide.layerOverrides?.[slotKey];
             const activeIdx = overrideIdx !== undefined ? overrideIdx : layerIndices[slotKey];
-
             if (activeIdx === null || activeIdx === undefined || activeIdx === "+1") continue;
 
             const hashId = slot.items[String(activeIdx)];
-            if (hashId && preset.images && preset.images[hashId]) {
+            if (hashId && preset.images?.[hashId]) {
               const layerAsset = preset.images[hashId];
               const url = objectUrlCache[layerAsset.fileName];
-              if (url) {
-                html += `<img src="${url}" class="lcd-layer" />`;
-              }
+              if (url) html += `<img src="${url}" class="lcd-layer" />`;
             }
           }
         }
 
-        if (html === '') {
-          html = '<div class="waiting"><h3>LCDスライド未設定</h3></div>';
-        }
-        if (!preset || !preset.lcdGroups) {
-          html = '<div class="waiting" style="background:#000;"></div>';
-        }
         stage.innerHTML = html;
       } catch (e) {
         console.error("LCD Sync Error:", e);
@@ -267,14 +123,130 @@ pub fn run() {
   </script>
 </body>
 </html>"#;
-                let response = Response::from_string(html).with_header(
-                    Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..])
-                        .unwrap(),
-                );
-                let _ = request.respond(response);
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct LcdServerState {
+    preset: Option<serde_json::Value>,
+    group_no: String,
+    slide_idx: usize,
+    layer_indices: HashMap<String, serde_json::Value>,
+    image_blobs: HashMap<String, Vec<u8>>,
+    playing_audio_file: String,
+    audio_nonce: u64,
+}
+
+lazy_static! {
+    static ref LCD_STATE: Arc<Mutex<LcdServerState>> =
+        Arc::new(Mutex::new(LcdServerState::default()));
+    static ref AUDIO_BLOBS_CACHE: Arc<Mutex<HashMap<String, Vec<u8>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+}
+
+#[tauri::command]
+fn sync_lcd_to_rust(state: LcdServerState) {
+    if let Ok(mut locked) = LCD_STATE.lock() {
+        *locked = state;
+    }
+}
+
+#[tauri::command]
+fn register_audio_blobs(blobs: HashMap<String, Vec<u8>>) {
+    if let Ok(mut locked) = AUDIO_BLOBS_CACHE.lock() {
+        *locked = blobs;
+    }
+}
+
+#[tauri::command]
+fn save_mchrn_file(default_name: String, data: Vec<u8>) -> Result<String, String> {
+    let file = rfd::FileDialog::new()
+        .set_file_name(&default_name)
+        .add_filter("Machirun Preset", &["mchrn"])
+        .save_file();
+
+    match file {
+        Some(path) => fs::write(&path, data)
+            .map(|_| path.to_string_lossy().to_string())
+            .map_err(|e| e.to_string()),
+        None => Err("Cancelled".to_string()),
+    }
+}
+
+fn build_response(data: Vec<u8>, content_type: &[u8]) -> Response<Cursor<Vec<u8>>> {
+    Response::from_data(data)
+        .with_header(Header::from_bytes(&b"Content-Type"[..], content_type).unwrap())
+        .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+}
+
+fn spawn_lcd_http_server() {
+    thread::spawn(|| {
+        let server = match Server::http("127.0.0.1:14280") {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[LCD Server] Bind error: {}", e);
+                return;
+            }
+        };
+
+        for request in server.incoming_requests() {
+            let url = request.url().to_string();
+            let clean_path = url.split('?').next().unwrap_or("");
+
+            if clean_path == "/api/state" {
+                let locked = LCD_STATE.lock().unwrap();
+                let json = serde_json::to_vec(&*locked).unwrap_or_else(|_| b"{}".to_vec());
+                let _ = request.respond(build_response(json, b"application/json"));
+            } else if let Some(filename) = clean_path.strip_prefix("/image/") {
+                let locked = LCD_STATE.lock().unwrap();
+                if let Some(bytes) = locked.image_blobs.get(filename) {
+                    let _ = request.respond(build_response(bytes.clone(), b"image/avif"));
+                } else {
+                    let _ = request.respond(Response::empty(404));
+                }
+            } else if let Some(filename) = clean_path.strip_prefix("/audio/") {
+                let locked = AUDIO_BLOBS_CACHE.lock().unwrap();
+                if let Some(bytes) = locked.get(filename) {
+                    let _ = request.respond(build_response(bytes.clone(), b"audio/ogg"));
+                } else {
+                    let _ = request.respond(Response::empty(404));
+                }
+            } else {
+                let _ = request.respond(build_response(
+                    OBS_LCD_HTML.as_bytes().to_vec(),
+                    b"text/html; charset=utf-8",
+                ));
             }
         }
     });
+}
+
+fn spawn_global_key_listener(app_handle: AppHandle) {
+    thread::spawn(move || {
+        let device_state = DeviceState::new();
+        let mut prev_right = false;
+        let mut prev_left = false;
+
+        loop {
+            let keys = device_state.get_keys();
+            let right = keys.contains(&Keycode::Right);
+            let left = keys.contains(&Keycode::Left);
+
+            if right && !prev_right {
+                let _ = app_handle.emit("global-key", "ArrowRight");
+            }
+            if left && !prev_left {
+                let _ = app_handle.emit("global-key", "ArrowLeft");
+            }
+
+            prev_right = right;
+            prev_left = left;
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    spawn_lcd_http_server();
 
     tauri::Builder::default()
         .setup(|app| {
@@ -285,38 +257,14 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            // 他のアプリへキーをそのまま通す「パススルー監視」スレッド
-            let app_handle = app.handle().clone();
-            thread::spawn(move || {
-                let device_state = DeviceState::new();
-                let mut prev_right = false;
-                let mut prev_left = false;
-
-                loop {
-                    let keys = device_state.get_keys();
-                    let right = keys.contains(&Keycode::Right);
-                    let left = keys.contains(&Keycode::Left);
-
-                    // 押された瞬間（立ち上がり）だけイベントを発火
-                    if right && !prev_right {
-                        let _ = app_handle.emit("global-key", "ArrowRight");
-                    }
-                    if left && !prev_left {
-                        let _ = app_handle.emit("global-key", "ArrowLeft");
-                    }
-
-                    prev_right = right;
-                    prev_left = left;
-                    thread::sleep(Duration::from_millis(20)); // CPU負荷ほぼゼロ
-                }
-            });
+            spawn_global_key_listener(app.handle().clone());
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             sync_lcd_to_rust,
-            save_mchrn_file,
-            register_audio_blobs
+            register_audio_blobs,
+            save_mchrn_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

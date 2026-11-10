@@ -1,53 +1,26 @@
 <script lang="ts">
-  // --- Imports ---
-  import { onMount } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
-  import type { RoutePreset, LcdSlide, ActionStep } from "./preset";
+  import {
+    createDefaultPreset,
+    resolveActionStateUpTo,
+    resolveAudioSequence,
+    type RoutePreset,
+    type LcdSlide,
+    type ActionStep,
+  } from "./preset";
   import { extractMasterStops } from "./timetable";
   import {
-    processImageToAvif,
-    processAudioToOpus,
-    exportArchiveMchrn,
-    importArchiveMchrn,
+    convertImageToAvif,
+    convertAudioToOpus,
+    saveMchrnArchive,
+    importMchrnArchive,
   } from "./archive";
-  import {
-    broadcastLcdState,
-    broadcastLcdAssets,
-    lcdChannel,
-    type LcdSyncMessage,
-  } from "./lcdChannel";
+  import { syncLcdStateToRust, registerAudioBlobsToRust } from "./lcdChannel";
   import LcdScreen from "./LcdScreen.svelte";
   import FileButton from "./FileButton.svelte";
   import Dropdown from "./Dropdown.svelte";
 
-  // --- Constants ---
-  const isTauri = "__TAURI_INTERNALS__" in window;
-
   let {
-    preset = $bindable<RoutePreset>({
-      meta: { name: "新規プリセット" },
-      images: {},
-      layerSlots: {
-        stop: { name: "停留所名レイヤー", linkedToCsvStop: true, items: {} },
-        fare: { name: "運賃表レイヤー", items: {} },
-      },
-      audios: {},
-      audioGroups: {},
-      lcdGroups: {
-        "1": {
-          name: "通常走行ループ",
-          loop: true,
-          slides: [
-            {
-              baseImageId: "",
-              durationSec: 8,
-              visibleLayers: ["stop", "fare"],
-            },
-          ],
-        },
-      },
-      actions: [],
-    }),
+    preset = $bindable<RoutePreset>(createDefaultPreset()),
     timetableCsv = $bindable(""),
     imageBlobs = $bindable<Record<string, Uint8Array>>({}),
     imageUrls = $bindable<Record<string, string>>({}),
@@ -62,32 +35,37 @@
     audioUrls?: Record<string, string>;
   } = $props();
 
-  // --- State & Derived ---
+  // --- Editor UI State & Derived ---
   let activeTab = $state<"base" | "layers" | "lcd" | "actions">("base");
   let newSlotKey = $state("");
   let newSlotName = $state("");
   let isLoopPreviewing = $state(false);
-
-  let masterStops = $derived(
-    timetableCsv ? extractMasterStops(timetableCsv) : [],
-  );
-
   let isRegisteringImage = $state(false);
   let isRegisteringAudio = $state(false);
 
   let previewGroupNo = $state("1");
   let previewSlideIdx = $state(0);
-  let previewLayerIndices = $state<Record<string, number>>({
+  let previewLayerIndices = $state<Record<string, number | null>>({
     stop: 0,
     fare: 0,
   });
+  let activePreviewStepIdx = $state<number | null>(null);
+  let previewAudioPlayer: HTMLAudioElement | null = null;
+
+  let expandedStepIdx = $state<number | null>(null);
+  let macroPattern = $state<"1-step" | "3-step">("3-step");
+  let macroRunningGroupNo = $state<number | undefined>(1);
+  let macroStoppingGroupNo = $state<number | undefined>(undefined);
+  let macroArriveAudioId = $state<string | undefined>(undefined);
+  let macroCloseAudioId = $state<string | undefined>(undefined);
+
+  let masterStops = $derived(
+    timetableCsv ? extractMasterStops(timetableCsv) : [],
+  );
 
   let currentPreviewSlide = $derived<LcdSlide | undefined>(
     preset.lcdGroups[previewGroupNo]?.slides[previewSlideIdx],
   );
-
-  let activePreviewStepIdx = $state<number | null>(null);
-  let previewAudioPlayer: HTMLAudioElement | null = null;
 
   let imageOptions = $derived([
     { value: "", label: "-- 画像を選択 --" },
@@ -104,12 +82,6 @@
     })),
   );
 
-  let expandedStepIdx = $state<number | null>(null);
-  let macroPattern = $state<"1-step" | "3-step">("3-step");
-  let macroRunningGroupNo = $state<number | undefined>(1);
-  let macroStoppingGroupNo = $state<number | undefined>(undefined);
-  let macroArriveAudioId = $state<string | undefined>(undefined);
-  let macroCloseAudioId = $state<string | undefined>(undefined);
   let audioSelectOptions = $derived([
     { value: undefined, label: "再生しない" },
     ...Object.entries(preset.audioGroups ?? {}).map(([gNo, grp]) => ({
@@ -122,29 +94,28 @@
     })),
   ]);
 
-  // --- Handlers & Methods ---
+  // --- Internal Helpers ---
 
-  /**
-   * 選択されたダイヤグラムCSVファイルをテキストとして読み込む
-   * @param files 選択されたFileList
-   */
-  async function handleCsvRegister(files: FileList): Promise<void> {
-    const file = files[0];
-    if (!file) return;
-    timetableCsv = await file.text();
+  function getNextGroupNumber(record: Record<string, unknown>): string {
+    const nums = Object.keys(record)
+      .map(Number)
+      .filter((n) => !Number.isNaN(n));
+    return String((nums.length > 0 ? Math.max(...nums) : 0) + 1);
   }
 
-  /**
-   * 選択された画像ファイルをAVIFへ一括変換し、プリセットに登録する
-   * @param files 選択されたFileList
-   */
+  // --- Asset Registration Handlers ---
+
+  async function handleCsvRegister(files: FileList): Promise<void> {
+    const file = files[0];
+    if (file) timetableCsv = await file.text();
+  }
+
   async function handleImageRegister(files: FileList): Promise<void> {
-    const fileList = Array.from(files);
     isRegisteringImage = true;
     try {
-      for (const file of fileList) {
+      for (const file of Array.from(files)) {
         try {
-          const res = await processImageToAvif(file);
+          const res = await convertImageToAvif(file);
           preset.images[res.hashId] = res.asset;
           imageBlobs[res.asset.fileName] = res.binary;
           imageUrls[res.hashId] = res.objectUrl;
@@ -157,11 +128,6 @@
     }
   }
 
-  /**
-   * 既存の画像アセットを同じハッシュIDのまま別ファイルで差し替える
-   * @param hashId 差し替え対象の画像ハッシュID
-   * @param files 選択されたFileList
-   */
   async function handleImageReplace(
     hashId: string,
     files: FileList,
@@ -171,7 +137,7 @@
     isRegisteringImage = true;
     try {
       if (imageUrls[hashId]) URL.revokeObjectURL(imageUrls[hashId]);
-      const res = await processImageToAvif(file, hashId);
+      const res = await convertImageToAvif(file, hashId);
       preset.images[hashId] = res.asset;
       imageBlobs[res.asset.fileName] = res.binary;
       imageUrls[hashId] = res.objectUrl;
@@ -182,10 +148,6 @@
     }
   }
 
-  /**
-   * 指定した画像アセットを削除し、参照しているレイヤーやスライドからも除外する
-   * @param hashId 削除対象の画像ハッシュID
-   */
   function handleImageRemove(hashId: string): void {
     const asset = preset.images[hashId];
     if (!asset) return;
@@ -197,36 +159,24 @@
     delete imageBlobs[asset.fileName];
     delete preset.images[hashId];
 
-    // レイヤースロット内の参照をクリア
     for (const slot of Object.values(preset.layerSlots)) {
       for (const [no, imgId] of Object.entries(slot.items)) {
-        if (imgId === hashId) {
-          slot.items[no] = "";
-        }
+        if (imgId === hashId) slot.items[no] = "";
       }
     }
-
-    // LCDスライドのベース画像参照をクリア
     for (const grp of Object.values(preset.lcdGroups)) {
       for (const slide of grp.slides) {
-        if (slide.baseImageId === hashId) {
-          slide.baseImageId = "";
-        }
+        if (slide.baseImageId === hashId) slide.baseImageId = "";
       }
     }
   }
 
-  /**
-   * 選択された音声ファイルをOpusへ一括変換し、プリセットに登録する
-   * @param files 選択されたFileList
-   */
   async function handleAudioRegister(files: FileList): Promise<void> {
-    const fileList = Array.from(files);
     isRegisteringAudio = true;
     try {
-      for (const file of fileList) {
+      for (const file of Array.from(files)) {
         try {
-          const res = await processAudioToOpus(file);
+          const res = await convertAudioToOpus(file);
           preset.audios[res.hashId] = res.asset;
           audioBlobs[res.asset.fileName] = res.binary;
           audioUrls[res.hashId] = res.objectUrl;
@@ -234,16 +184,12 @@
           console.error(`音声変換エラー (${file.name}):`, err);
         }
       }
+      registerAudioBlobsToRust(audioBlobs);
     } finally {
       isRegisteringAudio = false;
     }
   }
 
-  /**
-   * 既存の音声アセットを同じハッシュIDのまま別ファイルで差し替える
-   * @param hashId 差し替え対象の音声ハッシュID
-   * @param files 選択されたFileList
-   */
   async function handleAudioReplace(
     hashId: string,
     files: FileList,
@@ -253,10 +199,11 @@
     isRegisteringAudio = true;
     try {
       if (audioUrls[hashId]) URL.revokeObjectURL(audioUrls[hashId]);
-      const res = await processAudioToOpus(file, hashId);
+      const res = await convertAudioToOpus(file, hashId);
       preset.audios[hashId] = res.asset;
       audioBlobs[res.asset.fileName] = res.binary;
       audioUrls[hashId] = res.objectUrl;
+      registerAudioBlobsToRust(audioBlobs);
     } catch (err) {
       console.error(`音声差し替えエラー (${file.name}):`, err);
     } finally {
@@ -264,10 +211,6 @@
     }
   }
 
-  /**
-   * 指定した音声アセットを削除し、音声グループやアクションステップからも除外する
-   * @param hashId 削除対象の音声ハッシュID
-   */
   function handleAudioRemove(hashId: string): void {
     const asset = preset.audios[hashId];
     if (!asset) return;
@@ -279,43 +222,29 @@
     delete audioBlobs[asset.fileName];
     delete preset.audios[hashId];
 
-    // 音声グループ内の参照を除外
     if (preset.audioGroups) {
       for (const grp of Object.values(preset.audioGroups)) {
         grp.audioIds = grp.audioIds.filter((id) => id !== hashId);
       }
     }
-
-    // アクションステップの参照をクリア
     for (const step of preset.actions) {
-      if (step.playAudioId === hashId) {
-        step.playAudioId = undefined;
-      }
+      if (step.playAudioId === hashId) step.playAudioId = undefined;
     }
   }
 
-  /**
-   * 新しいレイヤースロットを追加する
-   */
+  // --- Layer & LCD Group Handlers ---
+
   function addLayerSlot(): void {
     const key = newSlotKey.trim();
     const name = newSlotName.trim();
     if (!key || !name || preset.layerSlots[key]) return;
 
-    preset.layerSlots[key] = {
-      name,
-      linkedToCsvStop: false,
-      items: {},
-    };
+    preset.layerSlots[key] = { name, linkedToCsvStop: false, items: {} };
     previewLayerIndices[key] = 0;
     newSlotKey = "";
     newSlotName = "";
   }
 
-  /**
-   * 指定したレイヤースロットを削除する
-   * @param slotKey 削除するスロットのキー
-   */
   function removeLayerSlot(slotKey: string): void {
     delete preset.layerSlots[slotKey];
     delete previewLayerIndices[slotKey];
@@ -326,32 +255,18 @@
     }
   }
 
-  /**
-   * CSVのマスター停留所数に合わせてレイヤー番号枠を一括生成する
-   * @param slotKey 対象スロットのキー
-   */
   function syncSlotItemsWithCsv(slotKey: string): void {
     const slot = preset.layerSlots[slotKey];
     if (!slot || masterStops.length === 0) return;
 
     for (let i = 0; i < masterStops.length; i++) {
       const no = String(i);
-      if (!(no in slot.items)) {
-        slot.items[no] = "";
-      }
+      if (!(no in slot.items)) slot.items[no] = "";
     }
   }
 
-  /**
-   * 新しいLCDグループを追加し、プレビュー対象をそのグループに切り替える
-   */
   function addLcdGroup(): void {
-    const existingNos = Object.keys(preset.lcdGroups)
-      .map(Number)
-      .filter((n) => !isNaN(n));
-    const nextNo = String(
-      (existingNos.length > 0 ? Math.max(...existingNos) : 0) + 1,
-    );
+    const nextNo = getNextGroupNumber(preset.lcdGroups);
     preset.lcdGroups[nextNo] = {
       name: `グループ #${nextNo}`,
       loop: true,
@@ -361,37 +276,19 @@
     previewSlideIdx = 0;
   }
 
-  /**
-   * 指定したLCDグループを削除する
-   * @param groupNo 削除対象のグループ番号
-   */
   function removeLcdGroup(groupNo: string): void {
     delete preset.lcdGroups[groupNo];
-    const remainingKeys = Object.keys(preset.lcdGroups);
-    previewGroupNo = remainingKeys[0] ?? "";
+    previewGroupNo = Object.keys(preset.lcdGroups)[0] ?? "";
     previewSlideIdx = 0;
   }
 
-  /**
-   * 選択中のLCDグループに新しいスライドを追加する
-   * @param groupNo 対象グループ番号
-   */
   function addSlide(groupNo: string): void {
     const group = preset.lcdGroups[groupNo];
     if (!group) return;
-    group.slides.push({
-      baseImageId: "",
-      durationSec: 6,
-      visibleLayers: [],
-    });
+    group.slides.push({ baseImageId: "", durationSec: 6, visibleLayers: [] });
     previewSlideIdx = group.slides.length - 1;
   }
 
-  /**
-   * 指定したスライドを削除する
-   * @param groupNo 対象グループ番号
-   * @param slideIdx 削除するスライドのインデックス
-   */
   function removeSlide(groupNo: string, slideIdx: number): void {
     const group = preset.lcdGroups[groupNo];
     if (!group || group.slides.length <= 1) return;
@@ -401,12 +298,6 @@
     }
   }
 
-  /**
-   * スライド内の特定レイヤーの表示・非表示を切り替える
-   * @param slide 対象スライド
-   * @param slotKey レイヤースロットのキー
-   * @param checked 表示する場合はtrue
-   */
   function toggleSlideLayer(
     slide: LcdSlide,
     slotKey: string,
@@ -421,60 +312,33 @@
     }
   }
 
-  /**
-   * スライド個別のレイヤー番号上書き（layerOverrides）を設定・解除する
-   * @param slide 対象スライド
-   * @param slotKey レイヤースロットのキー
-   * @param rawValue 入力された番号文字列（空文字の場合は上書き解除）
-   */
   function setSlideLayerOverride(
     slide: LcdSlide,
     slotKey: string,
     rawValue: string,
   ): void {
     if (!rawValue) {
-      if (slide.layerOverrides) {
-        delete slide.layerOverrides[slotKey];
-      }
+      delete slide.layerOverrides?.[slotKey];
       return;
     }
-    if (!slide.layerOverrides) {
-      slide.layerOverrides = {};
-    }
+    if (!slide.layerOverrides) slide.layerOverrides = {};
     slide.layerOverrides[slotKey] = Number(rawValue);
   }
 
-  /**
-   * 単体音声IDまたは音声グループ（"group:番号"）を順番に連続再生する
-   * @param targetId 再生対象のID（AudioAssetのhashId または "group:番号"）
-   */
+  // --- Audio & Action Step Handlers ---
+
   function playAudioSequence(targetId?: string): void {
     if (previewAudioPlayer) {
       previewAudioPlayer.pause();
       previewAudioPlayer = null;
     }
-    if (!targetId) return;
-
-    const queue: string[] = [];
-    if (targetId.startsWith("group:")) {
-      const gNo = targetId.slice(6);
-      const grp = preset.audioGroups?.[gNo];
-      if (grp) {
-        for (const id of grp.audioIds) {
-          if (audioUrls[id]) queue.push(audioUrls[id]);
-        }
-      }
-    } else if (audioUrls[targetId]) {
-      queue.push(audioUrls[targetId]);
-    }
-
-    if (queue.length === 0) return;
+    const { urls } = resolveAudioSequence(preset, audioUrls, targetId);
+    if (urls.length === 0) return;
 
     let currentIdx = 0;
     const playNext = () => {
-      if (currentIdx >= queue.length) return;
-      previewAudioPlayer = new Audio(queue[currentIdx]);
-      currentIdx++;
+      if (currentIdx >= urls.length) return;
+      previewAudioPlayer = new Audio(urls[currentIdx++]);
       previewAudioPlayer.onended = playNext;
       previewAudioPlayer
         .play()
@@ -483,33 +347,21 @@
     playNext();
   }
 
-  /**
-   * 新しい音声グループを追加する
-   */
   function addAudioGroup(): void {
     if (!preset.audioGroups) preset.audioGroups = {};
-    const nums = Object.keys(preset.audioGroups)
-      .map(Number)
-      .filter((n) => !isNaN(n));
-    const nextNo = String((nums.length > 0 ? Math.max(...nums) : 0) + 1);
+    const nextNo = getNextGroupNumber(preset.audioGroups);
     preset.audioGroups[nextNo] = {
       name: `音声グループ #${nextNo}`,
       audioIds: [""],
     };
   }
 
-  /**
-   * 全アクションステップの stepNo を 1 からの連番に振り直す
-   */
   function renumberActionSteps(): void {
     preset.actions.forEach((step, idx) => {
       step.stepNo = idx + 1;
     });
   }
 
-  /**
-   * 新しいアクションステップを末尾に追加する
-   */
   function addActionStep(): void {
     const isFirst = preset.actions.length === 0;
     const defaultGroupNo = Number(Object.keys(preset.lcdGroups)[0] ?? 1);
@@ -524,10 +376,6 @@
     });
   }
 
-  /**
-   * 指定したアクションステップを複製して直後に挿入する
-   * @param idx 複製元のインデックス
-   */
   function duplicateActionStep(idx: number): void {
     const source = preset.actions[idx];
     if (!source) return;
@@ -536,11 +384,6 @@
     renumberActionSteps();
   }
 
-  /**
-   * アクションステップの順序を上下に入れ替える
-   * @param idx 移動元のインデックス
-   * @param direction -1 で上へ、1 で下へ移動
-   */
   function moveActionStep(idx: number, direction: -1 | 1): void {
     const targetIdx = idx + direction;
     if (targetIdx < 0 || targetIdx >= preset.actions.length) return;
@@ -550,29 +393,17 @@
     renumberActionSteps();
   }
 
-  /**
-   * 指定したアクションステップを削除する
-   * @param idx 削除対象のインデックス
-   */
   function removeActionStep(idx: number): void {
     preset.actions.splice(idx, 1);
     renumberActionSteps();
   }
 
-  /**
-   * レイヤー制御（setLayers）の選択値を更新する
-   * @param step 対象ステップ
-   * @param slotKey レイヤースロットのキー
-   * @param val 選択された操作値（undefinedの場合はキーを削除）
-   */
   function updateStepLayerValue(
     step: ActionStep,
     slotKey: string,
     val: number | "+1" | null | undefined,
   ): void {
-    if (!step.setLayers) {
-      step.setLayers = {};
-    }
+    if (!step.setLayers) step.setLayers = {};
     if (val === undefined) {
       delete step.setLayers[slotKey];
     } else {
@@ -580,53 +411,16 @@
     }
   }
 
-  /**
-   * 先頭から指定インデックスまでのステップを順番にシミュレートし、
-   * 右カラムのLCDプレビュー状態と音声再生に反映する
-   * @param targetIdx テスト実行するステップのインデックス
-   */
   function simulateStepAt(targetIdx: number): void {
     activePreviewStepIdx = targetIdx;
-
-    const simulatedLayers: Record<string, number> = {};
-    for (const key of Object.keys(preset.layerSlots)) {
-      simulatedLayers[key] = 0;
-    }
-    let simulatedGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
-
-    for (let i = 0; i <= targetIdx; i++) {
-      const step = preset.actions[i];
-      if (!step) continue;
-
-      if (step.setLcdGroupNo !== undefined) {
-        simulatedGroupNo = String(step.setLcdGroupNo);
-      }
-
-      if (step.setLayers) {
-        for (const [slotKey, op] of Object.entries(step.setLayers)) {
-          if (op === "+1") {
-            simulatedLayers[slotKey] = (simulatedLayers[slotKey] ?? 0) + 1;
-          } else if (typeof op === "number") {
-            simulatedLayers[slotKey] = op;
-          } else if (op === null) {
-            simulatedLayers[slotKey] = -1;
-          }
-        }
-      }
-    }
-
-    previewGroupNo = simulatedGroupNo;
+    const resolved = resolveActionStateUpTo(preset, targetIdx);
+    previewGroupNo = resolved.lcdGroupNo;
     previewSlideIdx = 0;
-    previewLayerIndices = simulatedLayers;
+    previewLayerIndices = resolved.layerIndices;
 
-    // 対象ステップに音声が設定されていれば再生
-    const targetStep = preset.actions[targetIdx];
-    playAudioSequence(targetStep?.playAudioId);
+    playAudioSequence(preset.actions[targetIdx]?.playAudioId);
   }
 
-  /**
-   * CSVのマスター停留所リストに基づき、1段階式または3段階式の全アクションステップを一括生成する
-   */
   function generateStepsFromCsv(): void {
     if (masterStops.length === 0) return;
 
@@ -651,7 +445,7 @@
         if (sIdx === 0) {
           generated.push({
             stepNo: 1,
-            label: `業務放送`,
+            label: "業務放送",
             setStopIndex: 0,
             setLcdGroupNo: macroRunningGroupNo,
             setLayers: { ...initLayers },
@@ -711,63 +505,32 @@
     expandedStepIdx = null;
   }
 
-  /**
-   * 現在編集中のプリセット一式を .mchrn アーカイブとしてダウンロード保存する
-   */
+  // --- Archive Export / Import ---
+
   async function handleExport(): Promise<boolean> {
-    const dataMchrn = exportArchiveMchrn({
+    return saveMchrnArchive({
       preset,
       timetableCsv,
       imageBlobs,
-      imageUrls,
       audioBlobs,
-      audioUrls,
     });
-    if (isTauri) {
-      try {
-        // Rust側のネイティブ保存ダイアログを呼び出し
-        const savedPath = await invoke<string>("save_mchrn_file", {
-          defaultName: `${preset.meta.name || "preset"}.mchrn`,
-          data: Array.from(dataMchrn.Unit8Array),
-        });
-        console.log("Saved to:", savedPath);
-        return true;
-      } catch (e) {
-        if (e !== "Cancelled") {
-          console.error("Save failed:", e);
-        }
-        return false;
-      }
-    } else {
-      // ブラウザ環境向けのフォールバック（従来の方法）
-      const url = URL.createObjectURL(dataMchrn.blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${preset.meta.name || "preset"}.mchrn`;
-      a.click();
-      URL.revokeObjectURL(url);
-      return true;
-    }
   }
 
-  /**
-   * 既存の .mchrn / .zip アーカイブファイルを読み込み、エディタの状態を復元する
-   * @param files 選択されたFileList
-   */
   async function handleImport(files: FileList): Promise<void> {
     const file = files[0];
     if (!file) return;
-    const loaded = await importArchiveMchrn(file);
+    const loaded = await importMchrnArchive(file);
+    if (!loaded.preset.audioGroups) loaded.preset.audioGroups = {};
     preset = loaded.preset;
     timetableCsv = loaded.timetableCsv;
     imageBlobs = loaded.imageBlobs;
     imageUrls = loaded.imageUrls;
     audioBlobs = loaded.audioBlobs;
     audioUrls = loaded.audioUrls;
-    if (!loaded.preset.audioGroups) loaded.preset.audioGroups = {};
+    registerAudioBlobsToRust(loaded.audioBlobs);
   }
 
-  // --- Lifecycle & Effects ---
+  // --- Effects ---
 
   $effect(() => {
     if (!isLoopPreviewing) return;
@@ -792,34 +555,13 @@
   });
 
   $effect(() => {
-    broadcastLcdAssets(imageBlobs);
-  });
-
-  $effect(() => {
-    broadcastLcdState(
+    syncLcdStateToRust({
       preset,
-      previewGroupNo,
-      previewSlideIdx,
-      previewLayerIndices,
+      groupNo: previewGroupNo,
+      slideIdx: previewSlideIdx,
+      layerIndices: previewLayerIndices,
       imageBlobs,
-    );
-  });
-
-  onMount(() => {
-    const handleSyncRequest = (event: MessageEvent<LcdSyncMessage>) => {
-      if (event.data.type === "request-sync") {
-        broadcastLcdAssets(imageBlobs);
-        broadcastLcdState(
-          preset,
-          previewGroupNo,
-          previewSlideIdx,
-          previewLayerIndices,
-          imageBlobs,
-        );
-      }
-    };
-    lcdChannel.addEventListener("message", handleSyncRequest);
-    return () => lcdChannel.removeEventListener("message", handleSyncRequest);
+    });
   });
 </script>
 

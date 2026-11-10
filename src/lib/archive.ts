@@ -1,12 +1,10 @@
-// --- Imports ---
+import { invoke } from "@tauri-apps/api/core";
 import { zipSync, unzipSync, strToU8, strFromU8, type Zippable } from "fflate";
 import { encode as encodeAvif } from "@jsquash/avif";
 import { createOggEncoder } from "wasm-media-encoders";
 import type { RoutePreset, ImageAsset, AudioAsset } from "./preset";
 
-// --- Types ---
-
-/** エディタおよび再生時にメモリ上で保持する展開済みアーカイブデータ */
+/** エディタおよび車載器でメモリ上に保持する展開済みアーカイブデータ */
 export interface LoadedArchive {
   preset: RoutePreset;
   timetableCsv: string;
@@ -20,13 +18,8 @@ export interface LoadedArchive {
   audioUrls: Record<string, string>;
 }
 
-// --- Internal Helpers ---
-
 /**
- * Uint8Arrayをブラウザ標準のBlobオブジェクトへ安全に変換する
- * @param bytes 変換元のバイト配列
- * @param type MIMEタイプ文字列
- * @returns 生成されたBlobインスタンス
+ * Uint8Arrayをブラウザ標準のBlobオブジェクトへ変換する
  */
 function toBlob(bytes: Uint8Array, type?: string): Blob {
   return new Blob([bytes as BlobPart], type ? { type } : undefined);
@@ -34,21 +27,15 @@ function toBlob(bytes: Uint8Array, type?: string): Blob {
 
 /**
  * アセット用の16文字のランダムIDを生成する
- * @returns 16文字の英数字ID
  */
-function generateShortId(): string {
+function generateAssetId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
-// --- Asset Processing Functions ---
-
 /**
  * 任意の画像ファイルを透過維持のままAVIFへ変換し、アセット情報とバイナリを返す
- * @param file 入力された画像ファイル
- * @param existingHashId 差し替え時に引き継ぐ既存のハッシュID（省略時は新規生成）
- * @returns ハッシュID、アセットメタデータ、AVIFバイナリ、Object URL
  */
-export async function processImageToAvif(
+export async function convertImageToAvif(
   file: File,
   existingHashId?: string,
 ): Promise<{
@@ -75,7 +62,7 @@ export async function processImageToAvif(
     avifBytes = new Uint8Array(encodedBuffer);
   }
 
-  const hashId = existingHashId ?? generateShortId();
+  const hashId = existingHashId ?? generateAssetId();
   const fileName = `${hashId}.avif`;
   const objectUrl = URL.createObjectURL(toBlob(avifBytes, "image/avif"));
 
@@ -88,12 +75,9 @@ export async function processImageToAvif(
 }
 
 /**
- * 任意の音声ファイル（WAV/FLAC等）をOgg Opusへ変換し、アセット情報とバイナリを返す
- * @param file 入力された音声ファイル
- * @param existingHashId 差し替え時に引き継ぐ既存のハッシュID（省略時は新規生成）
- * @returns ハッシュID、アセットメタデータ、Opusバイナリ、Object URL
+ * 任意の音声ファイルをOgg Opusへ変換し、アセット情報とバイナリを返す
  */
-export async function processAudioToOpus(
+export async function convertAudioToOpus(
   file: File,
   existingHashId?: string,
 ): Promise<{
@@ -152,9 +136,11 @@ export async function processAudioToOpus(
     }
   }
 
-  const hashId = existingHashId ?? generateShortId();
+  const hashId = existingHashId ?? generateAssetId();
   const fileName = `${hashId}.opus`;
-  const objectUrl = URL.createObjectURL(toBlob(opusBytes, "audio/ogg; codecs=opus"));
+  const objectUrl = URL.createObjectURL(
+    toBlob(opusBytes, "audio/ogg; codecs=opus"),
+  );
 
   return {
     hashId,
@@ -164,19 +150,12 @@ export async function processAudioToOpus(
   };
 }
 
-// --- Archive I/O Functions ---
-
 /**
- * プリセットデータ一式を独自アーカイブ形式（.mchrn / ZIP構造）のBlobとして書き出す
- * - テキスト（preset.json, timetable.csv）は圧縮レベル9で格納
- * - 画像・音声（AVIF, Opus）は無圧縮（レベル0）で格納
- * @param data メモリ上のアーカイブデータ一式
- * @returns 書き出し用のBlobインスタンス
+ * プリセットデータ一式を .mchrn として圧縮し、ネイティブダイアログ（Web時はダウンロード）で保存する
  */
-export function exportArchiveMchrn(data: LoadedArchive): {
-  blob: Blob,
-  Unit8Array: Uint8Array<ArrayBuffer>
-} {
+export async function saveMchrnArchive(
+  data: Pick<LoadedArchive, "preset" | "timetableCsv" | "imageBlobs" | "audioBlobs">,
+): Promise<boolean> {
   const files: Zippable = {
     "preset.json": [strToU8(JSON.stringify(data.preset, null, 2)), { level: 9 }],
     "timetable.csv": [strToU8(data.timetableCsv), { level: 9 }],
@@ -189,21 +168,44 @@ export function exportArchiveMchrn(data: LoadedArchive): {
     files[`audio/${fileName}`] = [bin, { level: 0 }];
   }
 
-  const zipped = zipSync(files);
-  return { blob: toBlob(zipped, "application/octet-stream"), Unit8Array: zipped };
+  const zippedBytes = zipSync(files);
+  const defaultName = `${data.preset.meta.name || "preset"}.mchrn`;
+
+  if ("__TAURI_INTERNALS__" in window) {
+    try {
+      await invoke<string>("save_mchrn_file", {
+        defaultName,
+        data: Array.from(zippedBytes),
+      });
+      return true;
+    } catch (err) {
+      if (err !== "Cancelled") console.error("Save failed:", err);
+      return false;
+    }
+  }
+
+  const url = URL.createObjectURL(toBlob(zippedBytes, "application/octet-stream"));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = defaultName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  return true;
 }
 
 /**
  * アーカイブファイル（.mchrn / .zip）を読み込み、メモリ上のデータ構造へ展開する
- * @param file 読み込むアーカイブファイル
- * @returns 展開されたアーカイブデータ一式
  */
-export async function importArchiveMchrn(file: File): Promise<LoadedArchive> {
+export async function importMchrnArchive(file: File): Promise<LoadedArchive> {
   const buffer = new Uint8Array(await file.arrayBuffer());
   const unzipped = unzipSync(buffer);
 
-  const presetJson = unzipped["preset.json"] ? strFromU8(unzipped["preset.json"]) : "{}";
-  const timetableCsv = unzipped["timetable.csv"] ? strFromU8(unzipped["timetable.csv"]) : "";
+  const presetJson = unzipped["preset.json"]
+    ? strFromU8(unzipped["preset.json"])
+    : "{}";
+  const timetableCsv = unzipped["timetable.csv"]
+    ? strFromU8(unzipped["timetable.csv"])
+    : "";
   const preset: RoutePreset = JSON.parse(presetJson);
 
   const imageBlobs: Record<string, Uint8Array> = {};
@@ -215,7 +217,9 @@ export async function importArchiveMchrn(file: File): Promise<LoadedArchive> {
     const path = `image/${asset.fileName}`;
     if (unzipped[path]) {
       imageBlobs[asset.fileName] = unzipped[path];
-      imageUrls[hashId] = URL.createObjectURL(toBlob(unzipped[path], "image/avif"));
+      imageUrls[hashId] = URL.createObjectURL(
+        toBlob(unzipped[path], "image/avif"),
+      );
     }
   }
 

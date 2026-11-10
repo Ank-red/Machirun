@@ -1,47 +1,34 @@
 <script lang="ts">
-  // --- Imports ---
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import type { RoutePreset } from "./lib/preset";
-  import { parseOptDiaCsv, getTodayTrips } from "./lib/timetable";
-  import { importArchiveMchrn } from "./lib/archive";
   import {
-    broadcastLcdState,
+    createDefaultPreset,
+    resolveActionStateUpTo,
+    resolveAudioSequence,
+  } from "./lib/preset";
+  import { parseOptDiaCsv, getTodayTrips } from "./lib/timetable";
+  import { importMchrnArchive, type LoadedArchive } from "./lib/archive";
+  import {
+    syncLcdStateToRust,
     registerAudioBlobsToRust,
   } from "./lib/lcdChannel";
   import Header from "./lib/Header.svelte";
   import Dropdown from "./lib/Dropdown.svelte";
   import FileButton from "./lib/FileButton.svelte";
-  import LcdScreen from "./lib/LcdScreen.svelte";
   import PresetEditor from "./lib/PresetEditor.svelte";
 
-  // --- Constants ---
   const isTauri = "__TAURI_INTERNALS__" in window;
-  const isLcdMode =
-    new URLSearchParams(window.location.search).get("mode") === "lcd";
 
-  // --- State & Derived ---
-  let currentView = $state<"driver" | "editor">("driver");
-
-  /**
-   * 読み込み済みプリセットのコレクション管理
-   */
-  interface LoadedPresetItem {
+  interface LoadedPresetItem extends LoadedArchive {
     id: string;
     fileName: string;
-    preset: RoutePreset;
-    timetableCsv: string;
-    imageBlobs: Record<string, Uint8Array>;
-    imageUrls: Record<string, string>;
-    audioBlobs: Record<string, Uint8Array>;
-    audioUrls: Record<string, string>;
   }
+
+  // --- View & Preset Collection State ---
+  let currentView = $state<"driver" | "editor">("driver");
   let loadedPresets = $state<LoadedPresetItem[]>([]);
   let activePresetId = $state<string>("");
 
-  /**
-   * 現在アクティブなプリセットデータ
-   */
   let activeItem = $derived(
     loadedPresets.find((p) => p.id === activePresetId) ??
       loadedPresets[0] ??
@@ -54,7 +41,7 @@
   let audioBlobs = $derived(activeItem?.audioBlobs ?? {});
   let audioUrls = $derived(activeItem?.audioUrls ?? {});
 
-  // 車載器運行状態
+  // --- Driver Operation State ---
   let selectedTripIdx = $state<number>(0);
   let currentStopIdx = $state<number>(0);
   let currentActionIdx = $state<number>(-1);
@@ -69,21 +56,24 @@
   let now = $state<Date>(new Date());
   let activeAudioPlayer: HTMLAudioElement | null = null;
 
-  let winUrl = $state("#");
-  let rpmUrl = $state("#");
-  let debUrl = $state("#");
-  let AppImageUrl = $state("#");
+  // --- Release Download URLs (Web Only) ---
+  let releaseUrls = $state({
+    windows: "#",
+    rpm: "#",
+    deb: "#",
+    appImage: "#",
+  });
 
+  // --- Derived Timetable & Step Data ---
   let hasPresetActions = $derived(preset.actions.length > 0);
   let currentActionStep = $derived(preset.actions[currentActionIdx] ?? null);
 
-  // アクティブなmchrn内のダイヤ解析
   let rawTrips = $derived.by(() => {
     if (!timetableCsv) return [];
     try {
       return parseOptDiaCsv(timetableCsv);
-    } catch (e) {
-      console.error("CSV Parse Error:", e);
+    } catch (err) {
+      console.error("CSV Parse Error:", err);
       return [];
     }
   });
@@ -92,127 +82,79 @@
   let currentTrip = $derived(activeTrips[selectedTripIdx] ?? null);
   let currentStop = $derived(currentTrip?.stops[currentStopIdx] ?? null);
 
-  function createDefaultPreset(): RoutePreset {
-    return {
-      meta: { name: "新規プリセット" },
-      images: {},
-      layerSlots: {
-        stop: { name: "停留所名レイヤー", linkedToCsvStop: true, items: {} },
-        fare: { name: "運賃表レイヤー", items: {} },
-      },
-      audios: {},
-      audioGroups: {},
-      lcdGroups: {
-        "1": {
-          name: "通常走行ループ",
-          loop: true,
-          slides: [
-            {
-              baseImageId: "",
-              durationSec: 8,
-              visibleLayers: ["stop", "fare"],
-            },
-          ],
-        },
-      },
-      actions: [],
-    };
-  }
-
   // --- Handlers & Methods ---
 
-  /**
-   * 複数選択対応：.mchrnファイルを読み込んでコレクションに追加する
-   * @param files ファイル
-   */
-  async function handleLoadPresetFiles(files: FileList): Promise<void> {
-    for (const file of Array.from(files)) {
-      try {
-        const loaded = await importArchiveMchrn(file);
-        if (!loaded.preset.audioGroups) loaded.preset.audioGroups = {};
-
-        const id = Math.random().toString(36).substring(2, 9);
-        const newItem: LoadedPresetItem = {
-          id,
-          fileName: file.name,
-          preset: loaded.preset,
-          timetableCsv: loaded.timetableCsv,
-          imageBlobs: loaded.imageBlobs,
-          imageUrls: loaded.imageUrls,
-          audioBlobs: loaded.audioBlobs,
-          audioUrls: loaded.audioUrls,
-        };
-
-        loadedPresets = [...loadedPresets, newItem];
-        if (!activePresetId) {
-          activePresetId = id;
-        }
-        registerAudioBlobsToRust(audioBlobs);
-      } catch (err) {
-        console.error(`プリセット読込失敗 (${file.name}):`, err);
-      }
-    }
-    selectedTripIdx = 0;
-    currentActionIdx = -1;
-    currentStopIdx = 0;
-  }
-
-  /**
-   * 単体音声IDまたは音声グループ（"group:番号"）を順番に連続再生する
-   * @param targetId 再生対象のID
-   */
-  function playAudioSequence(targetId?: string): void {
+  function stopAudioPlayback(): void {
     if (activeAudioPlayer) {
       activeAudioPlayer.pause();
       activeAudioPlayer = null;
     }
-    if (!targetId) return;
+  }
 
-    let targetFileName = "";
-    const queue: string[] = [];
+  function resetOperationState(): void {
+    stopAudioPlayback();
+    selectedTripIdx = 0;
+    currentActionIdx = -1;
+    currentStopIdx = 0;
+    activeLcdGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
+    activeLcdSlideIdx = 0;
+    const initialLayers: Record<string, number | null> = {};
+    for (const key of Object.keys(preset.layerSlots)) {
+      initialLayers[key] = 0;
+    }
+    activeLayerIndices = initialLayers;
+  }
 
-    if (targetId.startsWith("group:")) {
-      const gNo = targetId.slice(6);
-      const grp = preset.audioGroups?.[gNo];
-      if (grp && grp.audioIds.length > 0) {
-        // グループの先頭（または最初の音声）のファイル名を特定
-        const firstAudioId = grp.audioIds[0];
-        const audioAsset = preset.audios?.[firstAudioId];
-        if (audioAsset) targetFileName = audioAsset.fileName;
+  async function handleLoadPresetFiles(files: FileList): Promise<void> {
+    for (const file of Array.from(files)) {
+      try {
+        const loaded = await importMchrnArchive(file);
+        if (!loaded.preset.audioGroups) loaded.preset.audioGroups = {};
 
-        for (const id of grp.audioIds) {
-          if (audioUrls[id]) queue.push(audioUrls[id]);
+        const id = crypto.randomUUID().slice(0, 8);
+        loadedPresets = [
+          ...loadedPresets,
+          { id, fileName: file.name, ...loaded },
+        ];
+        if (!activePresetId) {
+          activePresetId = id;
         }
+      } catch (err) {
+        console.error(`プリセット読込失敗 (${file.name}):`, err);
       }
-    } else {
-      const audioAsset = preset.audios?.[targetId];
-      if (audioAsset) targetFileName = audioAsset.fileName;
-      if (audioUrls[targetId]) queue.push(audioUrls[targetId]);
     }
+    resetOperationState();
+  }
 
-    // 音声ファイル名をセットしてnonceを進め、即座にRust側へ同期する
-    if (targetFileName) {
+  function playStepAudio(targetId?: string): void {
+    stopAudioPlayback();
+    const { urls, firstFileName } = resolveAudioSequence(
+      preset,
+      audioUrls,
+      targetId,
+    );
+
+    if (firstFileName) {
       const isStandby = hasPresetActions && currentActionIdx === -1;
-      currentPlayingAudioFile = targetFileName;
+      currentPlayingAudioFile = firstFileName;
       audioNonce++;
-      broadcastLcdState(
-        preset,
-        activeLcdGroupNo,
-        activeLcdSlideIdx,
-        activeLayerIndices,
-        isStandby ? {} : imageBlobs,
-        isStandby ? "" : currentPlayingAudioFile,
-        isStandby ? 0 : audioNonce,
-      );
+      syncLcdStateToRust({
+        preset: isStandby ? null : preset,
+        groupNo: activeLcdGroupNo,
+        slideIdx: activeLcdSlideIdx,
+        layerIndices: activeLayerIndices,
+        imageBlobs: isStandby ? {} : imageBlobs,
+        playingAudioFile: isStandby ? "" : currentPlayingAudioFile,
+        audioNonce: isStandby ? 0 : audioNonce,
+      });
     }
 
-    if (queue.length === 0) return;
+    if (urls.length === 0) return;
 
     let idx = 0;
     const playNext = () => {
-      if (idx >= queue.length) return;
-      activeAudioPlayer = new Audio(queue[idx]);
-      idx++;
+      if (idx >= urls.length) return;
+      activeAudioPlayer = new Audio(urls[idx++]);
       activeAudioPlayer.onended = playNext;
       activeAudioPlayer
         .play()
@@ -221,31 +163,17 @@
     playNext();
   }
 
-  /**
-   * 先頭から指定インデックスまでのアクションステップを計算・適用する
-   * （進むときも戻るときも状態がズレないよう、ステップ0から順に畳み込む）
-   * @param targetIdx 適用するアクションステップのインデックス
-   * @param shouldPlayAudio 対象ステップの音声を再生するかどうか
-   */
-  function applyActionStepsUpTo(
-    targetIdx: number,
-    shouldPlayAudio: boolean,
-  ): void {
+  function applyStepAt(targetIdx: number, shouldPlayAudio: boolean): void {
     if (preset.actions.length === 0) return;
 
     if (targetIdx < 0) {
       currentActionIdx = -1;
-      // 必要であれば初期状態にリセット
-      currentStopIdx = 0;
-      activeLcdGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
+      const initial = resolveActionStateUpTo(preset, -1);
+      currentStopIdx = initial.stopIndex;
+      activeLcdGroupNo = initial.lcdGroupNo;
       activeLcdSlideIdx = 0;
-      for (const key of Object.keys(preset.layerSlots)) {
-        activeLayerIndices[key] = 0;
-      }
-      if (activeAudioPlayer) {
-        activeAudioPlayer.pause();
-        activeAudioPlayer = null;
-      }
+      activeLayerIndices = initial.layerIndices;
+      stopAudioPlayback();
       return;
     }
 
@@ -255,106 +183,70 @@
     );
     currentActionIdx = clampedIdx;
 
-    let simStopIdx = 0;
-    let simGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
-    const simLayers: Record<string, number | "+1" | null> = {};
-    for (const key of Object.keys(preset.layerSlots)) {
-      simLayers[key] = 0;
-    }
-
     const maxStopIdx = Math.max(0, (currentTrip?.stops.length ?? 1) - 1);
+    const resolved = resolveActionStateUpTo(preset, clampedIdx, maxStopIdx);
 
-    for (let i = 0; i <= clampedIdx; i++) {
-      const step = preset.actions[i];
-      if (!step) continue;
-
-      if (step.setStopIndex !== undefined) {
-        if (step.setStopIndex === "+1") {
-          simStopIdx = Math.min(maxStopIdx, simStopIdx + 1);
-        } else {
-          simStopIdx = Math.min(maxStopIdx, step.setStopIndex);
-        }
-      }
-
-      if (step.setLcdGroupNo !== undefined) {
-        simGroupNo = String(step.setLcdGroupNo);
-      }
-
-      if (step.setLayers) {
-        for (const [slotKey, op] of Object.entries(step.setLayers)) {
-          if (op === "+1") {
-            const cur = simLayers[slotKey];
-            simLayers[slotKey] = typeof cur === "number" ? cur + 1 : 0;
-          } else if (typeof op === "number") {
-            simLayers[slotKey] = op;
-          } else if (op === null) {
-            simLayers[slotKey] = null;
-          }
-        }
-      }
-    }
-
-    currentStopIdx = simStopIdx;
-    if (activeLcdGroupNo !== simGroupNo) {
-      activeLcdGroupNo = simGroupNo;
+    currentStopIdx = resolved.stopIndex;
+    if (activeLcdGroupNo !== resolved.lcdGroupNo) {
+      activeLcdGroupNo = resolved.lcdGroupNo;
       activeLcdSlideIdx = 0;
     }
-    activeLayerIndices = simLayers;
+    activeLayerIndices = resolved.layerIndices;
 
     if (shouldPlayAudio) {
-      playAudioSequence(preset.actions[clampedIdx]?.playAudioId);
-    } else if (activeAudioPlayer) {
-      activeAudioPlayer.pause();
-      activeAudioPlayer = null;
+      playStepAudio(preset.actions[clampedIdx]?.playAudioId);
+    } else {
+      stopAudioPlayback();
     }
   }
 
-  /**
-   * メイン操作（進行ボタンまたは右矢印キー）実行時のステップ・停留所送り処理
-   */
-  function handleMainAction(): void {
-    if (!currentTrip) return;
-    if (hasPresetActions) {
-      if (currentActionIdx < preset.actions.length - 1) {
-        applyActionStepsUpTo(currentActionIdx + 1, true);
-      }
+  function advanceStep(): void {
+    if (!currentTrip || !hasPresetActions) return;
+    if (currentActionIdx < preset.actions.length - 1) {
+      applyStepAt(currentActionIdx + 1, true);
     }
   }
 
-  /**
-   * 1つ前のステップまたは停留所へ戻る処理（左矢印キーまたは前へボタン）
-   */
-  function prevStop(): void {
-    if (hasPresetActions) {
-      if (currentActionIdx > -1) {
-        applyActionStepsUpTo(currentActionIdx - 1, false);
-      }
+  function retreatStep(): void {
+    if (!hasPresetActions) return;
+    if (currentActionIdx > -1) {
+      applyStepAt(currentActionIdx - 1, false);
     }
   }
-  /**
-   * GitHub Releases APIから最新版のインストーラーダウンロードURLを取得する
-   */
+
   async function fetchLatestReleaseUrls(): Promise<void> {
-    const res = await fetch(
-      "https://api.github.com/repos/Ank-red/Machirun/releases/latest",
-    );
-    if (!res.ok) return;
-    const data = await res.json();
-    for (const asset of data.assets) {
-      if (asset.name.endsWith("-setup.exe"))
-        winUrl = asset.browser_download_url;
-      if (asset.name.endsWith(".rpm")) rpmUrl = asset.browser_download_url;
-      if (asset.name.endsWith(".deb")) debUrl = asset.browser_download_url;
-      if (asset.name.endsWith(".AppImage"))
-        AppImageUrl = asset.browser_download_url;
+    try {
+      const res = await fetch(
+        "https://api.github.com/repos/Ank-red/Machirun/releases/latest",
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const asset of data.assets ?? []) {
+        if (asset.name.endsWith("-setup.exe"))
+          releaseUrls.windows = asset.browser_download_url;
+        if (asset.name.endsWith(".rpm"))
+          releaseUrls.rpm = asset.browser_download_url;
+        if (asset.name.endsWith(".deb"))
+          releaseUrls.deb = asset.browser_download_url;
+        if (asset.name.endsWith(".AppImage"))
+          releaseUrls.appImage = asset.browser_download_url;
+      }
+    } catch (err) {
+      console.error("Failed to fetch release URLs:", err);
     }
   }
 
-  // --- Lifecycle & Effects ---
+  // --- Effects & Lifecycle ---
+
+  // アクティブなプリセットの音声バイナリが変わったらRust側へ登録
+  $effect(() => {
+    if (!isTauri) return;
+    registerAudioBlobsToRust(audioBlobs);
+  });
 
   // 車載器モード中のLCDスライド自動ループタイマー
   $effect(() => {
-    if (isLcdMode || currentView !== "driver") return;
+    if (!isTauri || currentView !== "driver") return;
     const group = preset.lcdGroups[activeLcdGroupNo];
     if (!group || group.slides.length <= 1) return;
 
@@ -373,84 +265,69 @@
     return () => clearTimeout(timer);
   });
 
-  // 車載器モード中のLCD状態を別ウィンドウ（PassengerApp）へ同期
+  // 車載器モード中のLCD状態をRustサーバーへ同期
   $effect(() => {
-    if (isLcdMode || currentView !== "driver") return;
-
+    if (!isTauri || currentView !== "driver") return;
     const isStandby = hasPresetActions && currentActionIdx === -1;
 
-    const sendingPreset = isStandby
-      ? {
-          meta: { name: "Standby" },
-          images: {},
-          layerSlots: {},
-          audioGroups: {},
-          lcdGroups: {},
-          actions: [],
-        }
-      : preset;
-
-    broadcastLcdState(
-      sendingPreset as any,
-      activeLcdGroupNo,
-      activeLcdSlideIdx,
-      activeLayerIndices,
-      isStandby ? {} : imageBlobs,
-      isStandby ? "" : currentPlayingAudioFile,
-      isStandby ? 0 : audioNonce,
-    );
+    syncLcdStateToRust({
+      preset: isStandby ? null : preset,
+      groupNo: activeLcdGroupNo,
+      slideIdx: activeLcdSlideIdx,
+      layerIndices: activeLayerIndices,
+      imageBlobs: isStandby ? {} : imageBlobs,
+      playingAudioFile: isStandby ? "" : currentPlayingAudioFile,
+      audioNonce: isStandby ? 0 : audioNonce,
+    });
   });
 
   onMount(() => {
+    if (!isTauri) {
+      fetchLatestReleaseUrls();
+      return;
+    }
+
     const timer = setInterval(() => {
       now = new Date();
     }, 1000);
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        ["INPUT", "SELECT", "TEXTAREA"].includes(
-          (e.target as HTMLElement).tagName,
-        )
-      )
-        return;
-      if (e.code === "ArrowRight") {
-        e.preventDefault();
-        handleMainAction();
-      } else if (e.code === "ArrowLeft") {
-        e.preventDefault();
-        prevStop();
-      }
-    };
-
     let unlisten: (() => void) | null = null;
-    if (isTauri) {
-      listen<string>("global-key", (event: { payload: string }) => {
-        if (event.payload === "ArrowRight") {
-          handleMainAction();
-        } else if (event.payload === "ArrowLeft") {
-          prevStop();
-        }
-      }).then((fn: (() => void) | null) => {
-        unlisten = fn;
-      });
-    } else {
-      window.addEventListener("keydown", handleKeyDown);
-      fetchLatestReleaseUrls();
-    }
+    listen<string>("global-key", (event) => {
+      if (currentView !== "driver") return;
+      if (event.payload === "ArrowRight") advanceStep();
+      else if (event.payload === "ArrowLeft") retreatStep();
+    }).then((fn) => {
+      unlisten = fn;
+    });
 
     return () => {
       clearInterval(timer);
-      if (unlisten) unlisten();
-      window.removeEventListener("keydown", handleKeyDown);
+      unlisten?.();
     };
   });
 </script>
 
-{#if isLcdMode}
-  <!-- OBS・別ウィンドウ用の独立LCDスクリーン -->
-  <LcdScreen standalone={true} />
+{#if !isTauri}
+  <!-- Webブラウザで開かれた場合はデスクトップ版のダウンロード案内のみ表示 -->
+  <Header title="Machirun Driver" />
+  <main class="responsive padding">
+    <article class="border round large-padding center-align">
+      <h5>Machirun デスクトップ版</h5>
+      <p>
+        車載器システムおよび停留所エディタはデスクトップ版アプリでご利用いただけます。
+      </p>
+      <div class="space"></div>
+      <nav class="center-align wrap">
+        <a class="button fill" href={releaseUrls.windows}>Windows</a>
+        <a class="button fill" href={releaseUrls.rpm}>Fedora Linux (rpm)</a>
+        <a class="button fill" href={releaseUrls.deb}>Debian GNU/Linux (deb)</a>
+        <a class="button fill" href={releaseUrls.appImage}>Linux版 (AppImage)</a
+        >
+      </nav>
+    </article>
+  </main>
 {:else}
-  <!-- 上部ナビゲーションヘッダー（タイトルクリックで車載器⇔エディタ切替） -->
+  <!-- デスクトップ版（Tauri）メイン画面 -->
   <Header title="Machirun">
     <Dropdown
       bind:value={currentView}
@@ -464,10 +341,7 @@
     {#if activeTrips.length > 0 && currentView === "driver"}
       <Dropdown
         bind:value={selectedTripIdx}
-        onchange={() => {
-          if (hasPresetActions) applyActionStepsUpTo(0, false);
-          else currentStopIdx = 0;
-        }}
+        onchange={() => applyStepAt(-1, false)}
         options={activeTrips.map((trip, idx) => ({
           value: idx,
           label: `${trip.trainNumber}便 (${trip.operationNumber}) ${trip.destination}行`,
@@ -481,21 +355,9 @@
           value: p.id,
           label: p.fileName,
         }))}
-        onchange={() => {
-          selectedTripIdx = 0;
-          currentActionIdx = 0;
-          currentStopIdx = 0;
-        }}
+        onchange={resetOperationState}
       />
     {/if}
-    <!-- <button
-      class="border"
-      onclick={openObsLcdWindow}
-      title="OBS用LCDモニタを開く"
-    >
-      <i>tv</i>
-      <span>OBS LCD</span>
-    </button> -->
     <FileButton
       label="mchrn追加読込"
       icon="folder_open"
@@ -505,10 +367,8 @@
     />
   </Header>
 
-  <!-- メインコンテンツ領域 -->
   <main class="responsive padding">
     {#if currentView === "driver"}
-      <!-- 車載器モニターパネル -->
       <article class="border round center-align">
         {#if loadedPresets.length === 0}
           <div class="padding">
@@ -566,16 +426,16 @@
             {#if currentActionIdx < 0}
               <button
                 class="max extra large-text"
-                onclick={handleMainAction}
+                onclick={advanceStep}
                 disabled={hasPresetActions &&
                   currentActionIdx >= preset.actions.length - 1}
               >
                 運行開始
               </button>
-            {:else if currentActionIdx >= 0}
+            {:else}
               <button
                 class="extra"
-                onclick={prevStop}
+                onclick={retreatStep}
                 disabled={hasPresetActions
                   ? currentActionIdx === 0
                   : currentStopIdx === 0}
@@ -585,7 +445,7 @@
 
               <button
                 class="max extra large-text"
-                onclick={handleMainAction}
+                onclick={advanceStep}
                 disabled={hasPresetActions &&
                   currentActionIdx >= preset.actions.length - 1}
               >
@@ -597,17 +457,6 @@
           <p class="empty">本日の運行便はありません</p>
         {/if}
       </article>
-
-      <!-- Web版向けデスクトップアプリ案内 -->
-      {#if !isTauri}
-        <section>
-          <p>デスクトップ版のダウンロードはこちら</p>
-          <a class="button fill" href={winUrl}>Windows</a>
-          <a class="button fill" href={rpmUrl}>Fedora Linux (rpm)</a>
-          <a class="button fill" href={debUrl}>Debian GNU/Linux (deb)</a>
-          <a class="button fill" href={AppImageUrl}>Linux版 (AppImage)</a>
-        </section>
-      {/if}
     {:else if activeItem}
       <PresetEditor
         bind:preset={activeItem.preset}

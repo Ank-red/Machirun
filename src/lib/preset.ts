@@ -89,3 +89,121 @@ export interface RoutePreset {
   lcdGroups: Record<string, LcdGroup>;
   actions: ActionStep[];
 }
+
+/** ステップ計算結果の状態 */
+export interface ResolvedActionState {
+  stopIndex: number;
+  lcdGroupNo: string;
+  layerIndices: Record<string, number | null>;
+}
+
+/**
+ * 初期状態の空プリセットを生成する
+ */
+export function createDefaultPreset(): RoutePreset {
+  return {
+    meta: { name: "新規プリセット" },
+    images: {},
+    layerSlots: {
+      stop: { name: "停留所名レイヤー", linkedToCsvStop: true, items: {} },
+      fare: { name: "運賃表レイヤー", items: {} },
+    },
+    audios: {},
+    audioGroups: {},
+    lcdGroups: {
+      "1": {
+        name: "通常走行ループ",
+        loop: true,
+        slides: [
+          {
+            baseImageId: "",
+            durationSec: 8,
+            visibleLayers: ["stop", "fare"],
+          },
+        ],
+      },
+    },
+    actions: [],
+  };
+}
+
+/**
+ * 先頭(0)から指定インデックスまでのアクションステップを順に畳み込み、
+ * 停留所インデックス・LCDグループ番号・各レイヤー番号を算出する
+ */
+export function resolveActionStateUpTo(
+  preset: RoutePreset,
+  targetIdx: number,
+  maxStopIdx: number = Infinity,
+): ResolvedActionState {
+  const defaultGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
+  const layerIndices: Record<string, number | null> = {};
+  for (const key of Object.keys(preset.layerSlots)) {
+    layerIndices[key] = 0;
+  }
+
+  if (targetIdx < 0 || preset.actions.length === 0) {
+    return { stopIndex: 0, lcdGroupNo: defaultGroupNo, layerIndices };
+  }
+
+  const clampedIdx = Math.min(targetIdx, preset.actions.length - 1);
+  let stopIndex = 0;
+  let lcdGroupNo = defaultGroupNo;
+
+  for (let i = 0; i <= clampedIdx; i++) {
+    const step = preset.actions[i];
+    if (!step) continue;
+
+    if (step.setStopIndex !== undefined) {
+      stopIndex =
+        step.setStopIndex === "+1"
+          ? Math.min(maxStopIdx, stopIndex + 1)
+          : Math.min(maxStopIdx, step.setStopIndex);
+    }
+
+    if (step.setLcdGroupNo !== undefined) {
+      lcdGroupNo = String(step.setLcdGroupNo);
+    }
+
+    if (step.setLayers) {
+      for (const [slotKey, op] of Object.entries(step.setLayers)) {
+        if (op === "+1") {
+          const current = layerIndices[slotKey];
+          layerIndices[slotKey] = typeof current === "number" ? current + 1 : 0;
+        } else if (typeof op === "number" || op === null) {
+          layerIndices[slotKey] = op;
+        }
+      }
+    }
+  }
+
+  return { stopIndex, lcdGroupNo, layerIndices };
+}
+
+/**
+ * 単体音声IDまたは音声グループID("group:番号")から再生対象のObject URL配列と先頭ファイル名を解決する
+ */
+export function resolveAudioSequence(
+  preset: RoutePreset,
+  audioUrls: Record<string, string>,
+  targetId?: string,
+): { urls: string[]; firstFileName: string } {
+  if (!targetId) return { urls: [], firstFileName: "" };
+
+  if (targetId.startsWith("group:")) {
+    const groupNo = targetId.slice(6);
+    const group = preset.audioGroups?.[groupNo];
+    if (!group || group.audioIds.length === 0) {
+      return { urls: [], firstFileName: "" };
+    }
+    const firstFileName = preset.audios[group.audioIds[0]]?.fileName ?? "";
+    const urls = group.audioIds
+      .map((id) => audioUrls[id])
+      .filter((url): url is string => Boolean(url));
+    return { urls, firstFileName };
+  }
+
+  const firstFileName = preset.audios[targetId]?.fileName ?? "";
+  const url = audioUrls[targetId];
+  return { urls: url ? [url] : [], firstFileName };
+}

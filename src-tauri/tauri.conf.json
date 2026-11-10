@@ -6,7 +6,7 @@
   "identifier": "city.machibayashi.machirun",
   "build": {
     "frontendDist": "../dist",
-    "devUrl": "http://localhost:5173/desktop",
+    "devUrl": "http://localhost:5173/driver.html",
     "beforeDevCommand": "bun dev",
     "beforeBuildCommand": "bun run build"
   },
@@ -18,7 +18,7 @@
         "height": 720,
         "resizable": true,
         "fullscreen": false,
-        "url": "desktop.html"
+        "url": "driver.html"
       }
     ],
     "security": {
