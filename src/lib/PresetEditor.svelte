@@ -26,6 +26,7 @@
     imageUrls = $bindable<Record<string, string>>({}),
     audioBlobs = $bindable<Record<string, Uint8Array>>({}),
     audioUrls = $bindable<Record<string, string>>({}),
+    isMuted = false,
   }: {
     preset?: RoutePreset;
     timetableCsv?: string;
@@ -33,6 +34,7 @@
     imageUrls?: Record<string, string>;
     audioBlobs?: Record<string, Uint8Array>;
     audioUrls?: Record<string, string>;
+    isMuted?: boolean;
   } = $props();
 
   // --- Editor UI State & Derived ---
@@ -339,6 +341,7 @@
     const playNext = () => {
       if (currentIdx >= urls.length) return;
       previewAudioPlayer = new Audio(urls[currentIdx++]);
+      previewAudioPlayer.muted = isMuted;
       previewAudioPlayer.onended = playNext;
       previewAudioPlayer
         .play()
@@ -562,6 +565,13 @@
       layerIndices: previewLayerIndices,
       imageBlobs,
     });
+  });
+
+  $effect(() => {
+    const muted = isMuted;
+    if (previewAudioPlayer) {
+      previewAudioPlayer.muted = muted;
+    }
   });
 </script>
 
