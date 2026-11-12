@@ -128,8 +128,14 @@
     resetOperationState();
   }
 
+  function toggleMute(): void {
+    isMuted = !isMuted;
+    if (activeAudioPlayer) {
+      activeAudioPlayer.muted = isMuted;
+    }
+  }
+
   function playStepAudio(targetId?: string): void {
-    if (isMuted) return;
     stopAudioPlayback();
     const { urls, firstFileName } = resolveAudioSequence(
       preset,
@@ -137,6 +143,7 @@
       targetId,
     );
 
+    // ミュート状態に関わらず、OBS（Rustサーバー）側へは常に再生トリガーを送る
     if (firstFileName) {
       const isStandby = hasPresetActions && currentActionIdx === -1;
       currentPlayingAudioFile = firstFileName;
@@ -158,6 +165,7 @@
     const playNext = () => {
       if (idx >= urls.length) return;
       activeAudioPlayer = new Audio(urls[idx++]);
+      activeAudioPlayer.muted = isMuted; // 現在のミュート状態を反映
       activeAudioPlayer.onended = playNext;
       activeAudioPlayer
         .play()
@@ -285,9 +293,6 @@
   });
 
   onMount(() => {
-    console.log(import.meta.env.DEV);
-    console.table(import.meta.env);
-
     if (!isTauri) {
       fetchLatestReleaseUrls();
       return;
@@ -366,7 +371,7 @@
     {/if}
     <button
       class="border circle"
-      onclick={() => (isMuted = !isMuted)}
+      onclick={toggleMute}
       title={isMuted ? "ミュート解除" : "ミュート"}
     >
       <i>{isMuted ? "volume_off" : "volume_up"}</i>
@@ -478,6 +483,7 @@
         bind:imageUrls={activeItem.imageUrls}
         bind:audioBlobs={activeItem.audioBlobs}
         bind:audioUrls={activeItem.audioUrls}
+        {isMuted}
       />
     {:else}
       <article class="border padding center-align">
