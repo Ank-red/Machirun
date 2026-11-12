@@ -31,6 +31,14 @@ function getGitChangelog(): CommitEntry[] {
           subject,
           versionTag: tagMatch?.[1] ?? (isVersionCommit ? subject.trim() : undefined),
         };
+      })
+      .filter((entry) => {
+        // "Merge" から始まるコミットメッセージやマージログを完全に排除する
+        const sub = entry.subject.toLowerCase();
+        if (sub.startsWith("merge") || sub.startsWith("Dev:") || sub.includes("merge branch") || sub.includes("merge pull request") || sub.includes("temp")) {
+          return false;
+        }
+        return true;
       });
   } catch {
     return [];
