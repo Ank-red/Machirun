@@ -1,5 +1,4 @@
 <script lang="ts" generics="T">
-  // --- Props ---
   let {
     value = $bindable(),
     options,
@@ -14,16 +13,21 @@
     onchange?: (val: T) => void;
   } = $props();
 
-  // --- State & Derived ---
+  let containerEl: HTMLDivElement;
+  let openUpward = $state(false);
+
   let selectedLabel = $derived(
     options.find((o) => o.value === value)?.label ?? String(value ?? ""),
   );
 
-  // --- Handlers & Methods ---
-  /**
-   * ドロップダウン項目を選択し、メニューのフォーカスを解除して閉じる
-   * @param val 選択された項目の値
-   */
+  function updateDirection(): void {
+    if (!containerEl) return;
+    const rect = containerEl.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    // 下側の余白が260px未満かつ上側に余裕がある場合は上方向に開く
+    openUpward = spaceBelow < 260 && rect.top > spaceBelow;
+  }
+
   function selectItem(val: T): void {
     value = val;
     onchange?.(val);
@@ -34,15 +38,25 @@
 </script>
 
 <!-- BeerCSS メニュードロップダウン -->
-<div class="dropdown-container" class:full-width={full}>
+<div bind:this={containerEl} class="dropdown-container" class:full-width={full}>
   {#if label}
     <span class="dropdown-label">{label}</span>
   {/if}
-  <button type="button" class="border dropdown-button">
-    <span class="dropdown-text">{selectedLabel}</span>
+  <button
+    type="button"
+    class="border dropdown-button"
+    onmouseenter={updateDirection}
+    onfocus={updateDirection}
+  >
+    <span class="dropdown-sizer">
+      <span class="dropdown-text">{selectedLabel}</span>
+      {#each options as opt}
+        <span class="dropdown-ghost" aria-hidden="true">{opt.label}</span>
+      {/each}
+    </span>
     <i>arrow_drop_down</i>
   </button>
-  <menu class="dropdown-menu">
+  <menu class="dropdown-menu" class:open-up={openUpward}>
     {#each options as opt}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -58,6 +72,7 @@
 
 <style>
   .dropdown-container {
+    position: relative;
     display: inline-flex;
     flex-direction: column;
     min-width: 0;
@@ -90,17 +105,37 @@
     margin: 0;
   }
 
-  .dropdown-text {
+  .dropdown-sizer {
+    display: inline-grid;
     flex: 1;
+    min-width: 0;
     text-align: left;
+  }
+
+  .dropdown-text,
+  .dropdown-ghost {
+    grid-area: 1 / 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .dropdown-ghost {
+    visibility: hidden;
+    height: 0;
+    pointer-events: none;
+    user-select: none;
   }
 
   .dropdown-menu {
     max-height: 16rem;
     overflow-y: auto;
     z-index: 100;
+  }
+
+  .dropdown-menu.open-up {
+    top: auto !important;
+    bottom: calc(100% + 0.25rem) !important;
+    transform: none !important;
   }
 </style>
