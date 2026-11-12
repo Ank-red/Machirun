@@ -16,6 +16,7 @@
   import Dropdown from "./lib/Dropdown.svelte";
   import FileButton from "./lib/FileButton.svelte";
   import PresetEditor from "./lib/PresetEditor.svelte";
+  import SoftwareInfo from "./lib/SoftwareInfo.svelte";
 
   const isTauri = "__TAURI_INTERNALS__" in window;
   const isDev = import.meta.env.DEV;
@@ -26,7 +27,7 @@
   }
 
   // --- View & Preset Collection State ---
-  let currentView = $state<"driver" | "editor">("driver");
+  let currentView = $state<"driver" | "editor" | "info">("driver");
   let loadedPresets = $state<LoadedPresetItem[]>([]);
   let activePresetId = $state<string>("");
 
@@ -340,6 +341,7 @@
       options={[
         { value: "driver", label: "車載器" },
         { value: "editor", label: "停留所エディタ" },
+        { value: "info", label: "ソフトウェア情報" },
       ]}
     />
     <div class="max" data-tauri-drag-region></div>
@@ -470,7 +472,7 @@
           <p class="empty">本日の運行便はありません</p>
         {/if}
       </article>
-    {:else if activeItem}
+    {:else if currentView === "editor" && activeItem}
       <PresetEditor
         bind:preset={activeItem.preset}
         bind:timetableCsv={activeItem.timetableCsv}
@@ -479,6 +481,8 @@
         bind:audioBlobs={activeItem.audioBlobs}
         bind:audioUrls={activeItem.audioUrls}
       />
+    {:else if currentView === "info"}
+      <SoftwareInfo />
     {:else}
       <article class="border padding center-align">
         <p>
