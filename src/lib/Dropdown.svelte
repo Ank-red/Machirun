@@ -56,7 +56,7 @@
     </span>
     <i>arrow_drop_down</i>
   </button>
-  <menu class="dropdown-menu" class:top={openUpward} class:open-up={openUpward}>
+  <menu class="dropdown-menu" class:open-up={openUpward}>
     {#each options as opt}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -72,6 +72,7 @@
 
 <style>
   .dropdown-container {
+    position: relative;
     display: inline-flex;
     flex-direction: column;
     min-width: 0;
@@ -134,7 +135,7 @@
 
   .dropdown-menu.open-up {
     top: auto !important;
-    bottom: 100% !important;
-    margin-bottom: 0.25rem;
+    bottom: calc(100% + 0.25rem) !important;
+    transform: none !important;
   }
 </style>
