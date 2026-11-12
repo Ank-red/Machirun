@@ -24,6 +24,7 @@ const EXTRA_IGNORE = [
   "package-lock.json",
   "Cargo.lock",
   "bundle-code.ts",
+  "release.ts",
   OUTPUT_FILE,
 ];
 
@@ -49,7 +50,7 @@ async function getTargetFiles(): Promise<string[]> {
 
 async function generateMarkdown() {
   const matchedFiles = await getTargetFiles();
-  let output = `# ※以前のコード差分は無視して、以下の最新コードだけを前提にしてください\n\n`;
+  let output = `# ※以前のコード差分は無視して、以下の最新コードを前提にしてください\n\n`;
   let count = 0;
 
   for (const relPath of matchedFiles) {
