@@ -23,6 +23,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Linux dependencies (for Tauri & device_query)
         if: matrix.platform == 'ubuntu-22.04'
