@@ -50,8 +50,9 @@ async function runRelease() {
   await Bun.sleep(1000);
   await $`git add package.json ${tauriConfPath} ${cargoPath} ${cargoPath.replace("toml", "lock")}`;
   await $`git commit -m ${newVersion}`;
-  await $`git tag ${tagName}`;
-  await $`git push --follow-tags`;
+  await $`git tag -a ${tagName}`;
+  await $`git push origin HEAD`;
+  await $`git push origin ${tagName}`;
 
   console.log(`✅ リリース完了: コミット "${newVersion}" & タグ "${tagName}" をプッシュしました！`);
 }
