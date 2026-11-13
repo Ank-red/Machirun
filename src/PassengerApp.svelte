@@ -1,3 +1,4 @@
+<!-- 乗客向け案内画面（準備中プレースホルダー） -->
 <main class="middle-align center-align">
   <article class="large-padding middle-align center-align">
     <div class="large-padding">

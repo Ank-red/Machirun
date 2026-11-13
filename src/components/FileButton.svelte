@@ -1,5 +1,6 @@
 <script lang="ts">
   // --- Props ---
+
   let {
     label,
     icon = "upload_file",
@@ -19,9 +20,12 @@
   } = $props();
 
   // --- State ---
+
+  /** 非表示のファイル入力要素参照 */
   let fileInput: HTMLInputElement;
 
   // --- Handlers & Methods ---
+
   /**
    * 隠しファイル入力要素のクリックイベントを発火させる
    */
@@ -31,18 +35,19 @@
 
   /**
    * ファイル選択時に親コンポーネントへFileListを渡し、入力値をリセットする
+   * @param event ファイル入力のchangeイベント
    */
-  function handleChange(e: Event): void {
-    const target = e.currentTarget as HTMLInputElement;
+  function handleChange(event: Event): void {
+    const target = event.currentTarget as HTMLInputElement;
     if (target.files && target.files.length > 0) {
       onselect(target.files);
-      target.value = ""; // 同じファイルを再度選択できるようにリセット
+      target.value = "";
     }
   }
 </script>
 
 <!-- ファイル選択トリガーボタン -->
-<button class={variant} {disabled} onclick={triggerSelect}>
+<button type="button" class={variant} {disabled} onclick={triggerSelect}>
   <i>{icon}</i>
   <span>{label}</span>
 </button>

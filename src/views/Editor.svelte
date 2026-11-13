@@ -1,26 +1,24 @@
 <script lang="ts">
-  import {
-    createDefaultPreset,
-    resolveActionStateUpTo,
-    resolveAudioSequence,
-    type RoutePreset,
-    type LcdSlide,
-    type ActionStep,
-  } from "./preset";
-  import { extractMasterStops } from "./timetable";
-  import {
-    convertImageToAvif,
-    convertAudioToOpus,
-    saveMchrnArchive,
-    importMchrnArchive,
-  } from "./archive";
-  import { syncLcdStateToRust, registerAudioBlobsToRust } from "./lcdChannel";
-  import LcdScreen from "./LcdScreen.svelte";
-  import FileButton from "./FileButton.svelte";
-  import Dropdown from "./Dropdown.svelte";
+  // --- Imports ---
+
+  import Dropdown from "../components/Dropdown.svelte";
+  import FileButton from "../components/FileButton.svelte";
+  import LcdScreen from "../components/LcdScreen.svelte";
+  import { ArchiveService } from "../core/archive";
+  import { AudioPlayerService } from "../core/audioPlayer";
+  import { LcdSyncService } from "../core/lcdSync";
+  import { PresetService } from "../core/preset";
+  import { TimetableService } from "../core/timetable";
+  import type {
+    ConvertedAssetResult,
+    LcdSlide,
+    RoutePreset,
+  } from "../core/types";
+
+  // --- Props ---
 
   let {
-    preset = $bindable<RoutePreset>(createDefaultPreset()),
+    preset = $bindable<RoutePreset>(PresetService.createDefault()),
     timetableCsv = $bindable(""),
     imageBlobs = $bindable<Record<string, Uint8Array>>({}),
     imageUrls = $bindable<Record<string, string>>({}),
@@ -37,14 +35,24 @@
     isMuted?: boolean;
   } = $props();
 
-  // --- Editor UI State & Derived ---
+  // --- Services & Editor UI State ---
+
+  /** エディタ内試聴用の音声プレイヤーインスタンス */
+  const previewPlayer = new AudioPlayerService();
+
+  /** 現在開いている編集タブ */
   let activeTab = $state<"base" | "layers" | "lcd" | "actions">("base");
+
+  /** 新規レイヤースロット追加用の入力状態 */
   let newSlotKey = $state("");
   let newSlotName = $state("");
-  let isLoopPreviewing = $state(false);
+
+  /** アセット変換処理中のローディング状態 */
   let isRegisteringImage = $state(false);
   let isRegisteringAudio = $state(false);
 
+  /** LCDリアルタイムプレビューの状態 */
+  let isLoopPreviewing = $state(false);
   let previewGroupNo = $state("1");
   let previewSlideIdx = $state(0);
   let previewLayerIndices = $state<Record<string, number | null>>({
@@ -52,8 +60,8 @@
     fare: 0,
   });
   let activePreviewStepIdx = $state<number | null>(null);
-  let previewAudioPlayer: HTMLAudioElement | null = null;
 
+  /** アクションステップの展開・一括生成マクロ設定状態 */
   let expandedStepIdx = $state<number | null>(null);
   let macroPattern = $state<"1-step" | "3-step">("3-step");
   let macroRunningGroupNo = $state<number | undefined>(1);
@@ -61,14 +69,17 @@
   let macroArriveAudioId = $state<string | undefined>(undefined);
   let macroCloseAudioId = $state<string | undefined>(undefined);
 
-  let masterStops = $derived(
-    timetableCsv ? extractMasterStops(timetableCsv) : [],
-  );
+  // --- Derived ---
 
+  /** CSVから抽出されたマスター停留所リスト */
+  let masterStops = $derived(TimetableService.extractMasterStops(timetableCsv));
+
+  /** 現在プレビュー中のLCDスライド */
   let currentPreviewSlide = $derived<LcdSlide | undefined>(
     preset.lcdGroups[previewGroupNo]?.slides[previewSlideIdx],
   );
 
+  /** 画像選択ドロップダウン用の選択肢配列 */
   let imageOptions = $derived([
     { value: "", label: "-- 画像を選択 --" },
     ...Object.entries(preset.images).map(([id, asset]) => ({
@@ -77,6 +88,7 @@
     })),
   ]);
 
+  /** LCDグループ選択ドロップダウン用の選択肢配列 */
   let lcdGroupOptions = $derived(
     Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
       value: gNo,
@@ -84,6 +96,16 @@
     })),
   );
 
+  /** 単体音声選択ドロップダウン用の選択肢配列 */
+  let singleAudioOptions = $derived([
+    { value: "", label: "-- 音声を選択 --" },
+    ...Object.entries(preset.audios).map(([audId, asset]) => ({
+      value: audId,
+      label: `${asset.originalName} (${audId.slice(0, 6)})`,
+    })),
+  ]);
+
+  /** アクションステップ用（音声グループ＋単体音声）の選択肢配列 */
   let audioSelectOptions = $derived([
     { value: undefined, label: "再生しない" },
     ...Object.entries(preset.audioGroups ?? {}).map(([gNo, grp]) => ({
@@ -96,147 +118,220 @@
     })),
   ]);
 
-  // --- Internal Helpers ---
+  // --- Unified Asset Management Handlers ---
 
-  function getNextGroupNumber(record: Record<string, unknown>): string {
-    const nums = Object.keys(record)
-      .map(Number)
-      .filter((n) => !Number.isNaN(n));
-    return String((nums.length > 0 ? Math.max(...nums) : 0) + 1);
-  }
-
-  // --- Asset Registration Handlers ---
-
+  /**
+   * ダイヤグラムCSVファイルを読み込んで状態を更新する
+   * @param files 選択されたFileList
+   */
   async function handleCsvRegister(files: FileList): Promise<void> {
     const file = files[0];
     if (file) timetableCsv = await file.text();
   }
 
+  /**
+   * 複数のファイルに対して変換関数を実行し、アセット辞書・バイナリ・Object URLへ一括登録する共通ヘルパー
+   * @param files 登録するファイル群
+   * @param converter ファイル変換関数
+   * @param targetAssets 登録先のアセット辞書
+   * @param targetBlobs 登録先のバイナリ辞書
+   * @param targetUrls 登録先のObject URL辞書
+   */
+  async function registerAssetsBatch<
+    T extends { fileName: string; originalName: string },
+  >(
+    files: FileList,
+    converter: (
+      file: File,
+      existingId?: string,
+    ) => Promise<ConvertedAssetResult<T>>,
+    targetAssets: Record<string, T>,
+    targetBlobs: Record<string, Uint8Array>,
+    targetUrls: Record<string, string>,
+  ): Promise<void> {
+    for (const file of Array.from(files)) {
+      try {
+        const res = await converter(file);
+        targetAssets[res.hashId] = res.asset;
+        targetBlobs[res.asset.fileName] = res.binary;
+        targetUrls[res.hashId] = res.objectUrl;
+      } catch (err) {
+        console.error(`アセット変換エラー (${file.name}):`, err);
+      }
+    }
+  }
+
+  /**
+   * 既存ハッシュIDを維持したまま単一ファイルを差し替える共通ヘルパー
+   * @param hashId 差し替え対象のハッシュID
+   * @param files 選択されたFileList
+   * @param converter ファイル変換関数
+   * @param targetAssets 登録先のアセット辞書
+   * @param targetBlobs 登録先のバイナリ辞書
+   * @param targetUrls 登録先のObject URL辞書
+   */
+  async function replaceSingleAsset<
+    T extends { fileName: string; originalName: string },
+  >(
+    hashId: string,
+    files: FileList,
+    converter: (
+      file: File,
+      existingId?: string,
+    ) => Promise<ConvertedAssetResult<T>>,
+    targetAssets: Record<string, T>,
+    targetBlobs: Record<string, Uint8Array>,
+    targetUrls: Record<string, string>,
+  ): Promise<void> {
+    const file = files[0];
+    if (!file) return;
+    try {
+      if (targetUrls[hashId]) URL.revokeObjectURL(targetUrls[hashId]);
+      const res = await converter(file, hashId);
+      targetAssets[hashId] = res.asset;
+      targetBlobs[res.asset.fileName] = res.binary;
+      targetUrls[hashId] = res.objectUrl;
+    } catch (err) {
+      console.error(`アセット差し替えエラー (${file.name}):`, err);
+    }
+  }
+
+  /**
+   * 画像アセットを追加登録する
+   * @param files 選択された画像FileList
+   */
   async function handleImageRegister(files: FileList): Promise<void> {
     isRegisteringImage = true;
     try {
-      for (const file of Array.from(files)) {
-        try {
-          const res = await convertImageToAvif(file);
-          preset.images[res.hashId] = res.asset;
-          imageBlobs[res.asset.fileName] = res.binary;
-          imageUrls[res.hashId] = res.objectUrl;
-        } catch (err) {
-          console.error(`画像変換エラー (${file.name}):`, err);
-        }
-      }
+      await registerAssetsBatch(
+        files,
+        (f, id) => ArchiveService.convertImageToAvif(f, id),
+        preset.images,
+        imageBlobs,
+        imageUrls,
+      );
     } finally {
       isRegisteringImage = false;
     }
   }
 
+  /**
+   * 既存の画像アセットを別ファイルで差し替える
+   * @param hashId 差し替え対象の画像ハッシュID
+   * @param files 選択された画像FileList
+   */
   async function handleImageReplace(
     hashId: string,
     files: FileList,
   ): Promise<void> {
-    const file = files[0];
-    if (!file) return;
     isRegisteringImage = true;
     try {
-      if (imageUrls[hashId]) URL.revokeObjectURL(imageUrls[hashId]);
-      const res = await convertImageToAvif(file, hashId);
-      preset.images[hashId] = res.asset;
-      imageBlobs[res.asset.fileName] = res.binary;
-      imageUrls[hashId] = res.objectUrl;
-    } catch (err) {
-      console.error(`画像差し替えエラー (${file.name}):`, err);
+      await replaceSingleAsset(
+        hashId,
+        files,
+        (f, id) => ArchiveService.convertImageToAvif(f, id),
+        preset.images,
+        imageBlobs,
+        imageUrls,
+      );
     } finally {
       isRegisteringImage = false;
     }
   }
 
+  /**
+   * 画像アセットを削除し、プリセット内の参照をクリーンアップする
+   * @param hashId 削除する画像ハッシュID
+   */
   function handleImageRemove(hashId: string): void {
     const asset = preset.images[hashId];
     if (!asset) return;
-
     if (imageUrls[hashId]) {
       URL.revokeObjectURL(imageUrls[hashId]);
       delete imageUrls[hashId];
     }
     delete imageBlobs[asset.fileName];
-    delete preset.images[hashId];
-
-    for (const slot of Object.values(preset.layerSlots)) {
-      for (const [no, imgId] of Object.entries(slot.items)) {
-        if (imgId === hashId) slot.items[no] = "";
-      }
-    }
-    for (const grp of Object.values(preset.lcdGroups)) {
-      for (const slide of grp.slides) {
-        if (slide.baseImageId === hashId) slide.baseImageId = "";
-      }
-    }
+    PresetService.cleanupImageReferences(preset, hashId);
   }
 
+  /**
+   * 音声アセットを追加登録し、Rustサーバーへ同期する
+   * @param files 選択された音声FileList
+   */
   async function handleAudioRegister(files: FileList): Promise<void> {
     isRegisteringAudio = true;
     try {
-      for (const file of Array.from(files)) {
-        try {
-          const res = await convertAudioToOpus(file);
-          preset.audios[res.hashId] = res.asset;
-          audioBlobs[res.asset.fileName] = res.binary;
-          audioUrls[res.hashId] = res.objectUrl;
-        } catch (err) {
-          console.error(`音声変換エラー (${file.name}):`, err);
-        }
-      }
-      registerAudioBlobsToRust(audioBlobs);
+      await registerAssetsBatch(
+        files,
+        (f, id) => ArchiveService.convertAudioToOpus(f, id),
+        preset.audios,
+        audioBlobs,
+        audioUrls,
+      );
+      await LcdSyncService.registerAudioBlobs(audioBlobs);
     } finally {
       isRegisteringAudio = false;
     }
   }
 
+  /**
+   * 既存の音声アセットを別ファイルで差し替え、Rustサーバーへ同期する
+   * @param hashId 差し替え対象の音声ハッシュID
+   * @param files 選択された音声FileList
+   */
   async function handleAudioReplace(
     hashId: string,
     files: FileList,
   ): Promise<void> {
-    const file = files[0];
-    if (!file) return;
     isRegisteringAudio = true;
     try {
-      if (audioUrls[hashId]) URL.revokeObjectURL(audioUrls[hashId]);
-      const res = await convertAudioToOpus(file, hashId);
-      preset.audios[hashId] = res.asset;
-      audioBlobs[res.asset.fileName] = res.binary;
-      audioUrls[hashId] = res.objectUrl;
-      registerAudioBlobsToRust(audioBlobs);
-    } catch (err) {
-      console.error(`音声差し替えエラー (${file.name}):`, err);
+      await replaceSingleAsset(
+        hashId,
+        files,
+        (f, id) => ArchiveService.convertAudioToOpus(f, id),
+        preset.audios,
+        audioBlobs,
+        audioUrls,
+      );
+      await LcdSyncService.registerAudioBlobs(audioBlobs);
     } finally {
       isRegisteringAudio = false;
     }
   }
 
+  /**
+   * 音声アセットを削除し、プリセット内の参照をクリーンアップする
+   * @param hashId 削除する音声ハッシュID
+   */
   function handleAudioRemove(hashId: string): void {
     const asset = preset.audios[hashId];
     if (!asset) return;
-
     if (audioUrls[hashId]) {
       URL.revokeObjectURL(audioUrls[hashId]);
       delete audioUrls[hashId];
     }
     delete audioBlobs[asset.fileName];
-    delete preset.audios[hashId];
+    PresetService.cleanupAudioReferences(preset, hashId);
+  }
 
-    if (preset.audioGroups) {
-      for (const grp of Object.values(preset.audioGroups)) {
-        grp.audioIds = grp.audioIds.filter((id) => id !== hashId);
-      }
-    }
-    for (const step of preset.actions) {
-      if (step.playAudioId === hashId) step.playAudioId = undefined;
-    }
+  /**
+   * 新規音声グループを追加する
+   */
+  function handleAddAudioGroup(): void {
+    if (!preset.audioGroups) preset.audioGroups = {};
+    const nextNo = PresetService.getNextGroupNumber(preset.audioGroups);
+    preset.audioGroups[nextNo] = {
+      name: `音声グループ #${nextNo}`,
+      audioIds: [""],
+    };
   }
 
   // --- Layer & LCD Group Handlers ---
 
-  function addLayerSlot(): void {
+  /**
+   * 新規レイヤースロットを追加する
+   */
+  function handleAddLayerSlot(): void {
     const key = newSlotKey.trim();
     const name = newSlotName.trim();
     if (!key || !name || preset.layerSlots[key]) return;
@@ -247,16 +342,19 @@
     newSlotName = "";
   }
 
-  function removeLayerSlot(slotKey: string): void {
-    delete preset.layerSlots[slotKey];
+  /**
+   * レイヤースロットを削除する
+   * @param slotKey 削除対象のスロットキー
+   */
+  function handleRemoveLayerSlot(slotKey: string): void {
+    PresetService.removeLayerSlot(preset, slotKey);
     delete previewLayerIndices[slotKey];
-    for (const group of Object.values(preset.lcdGroups)) {
-      for (const slide of group.slides) {
-        slide.visibleLayers = slide.visibleLayers.filter((k) => k !== slotKey);
-      }
-    }
   }
 
+  /**
+   * CSVのマスター停留所数に合わせてレイヤースロットの番号枠を作成する
+   * @param slotKey 対象のスロットキー
+   */
   function syncSlotItemsWithCsv(slotKey: string): void {
     const slot = preset.layerSlots[slotKey];
     if (!slot || masterStops.length === 0) return;
@@ -267,8 +365,11 @@
     }
   }
 
-  function addLcdGroup(): void {
-    const nextNo = getNextGroupNumber(preset.lcdGroups);
+  /**
+   * 新規LCDグループを追加する
+   */
+  function handleAddLcdGroup(): void {
+    const nextNo = PresetService.getNextGroupNumber(preset.lcdGroups);
     preset.lcdGroups[nextNo] = {
       name: `グループ #${nextNo}`,
       loop: true,
@@ -278,20 +379,33 @@
     previewSlideIdx = 0;
   }
 
-  function removeLcdGroup(groupNo: string): void {
+  /**
+   * 指定したLCDグループを削除する
+   * @param groupNo 削除対象のグループ番号
+   */
+  function handleRemoveLcdGroup(groupNo: string): void {
     delete preset.lcdGroups[groupNo];
     previewGroupNo = Object.keys(preset.lcdGroups)[0] ?? "";
     previewSlideIdx = 0;
   }
 
-  function addSlide(groupNo: string): void {
+  /**
+   * 選択中のLCDグループに新規スライドを追加する
+   * @param groupNo 対象のグループ番号
+   */
+  function handleAddSlide(groupNo: string): void {
     const group = preset.lcdGroups[groupNo];
     if (!group) return;
     group.slides.push({ baseImageId: "", durationSec: 6, visibleLayers: [] });
     previewSlideIdx = group.slides.length - 1;
   }
 
-  function removeSlide(groupNo: string, slideIdx: number): void {
+  /**
+   * 指定したスライドを削除する
+   * @param groupNo 対象のグループ番号
+   * @param slideIdx 削除するスライドのインデックス
+   */
+  function handleRemoveSlide(groupNo: string, slideIdx: number): void {
     const group = preset.lcdGroups[groupNo];
     if (!group || group.slides.length <= 1) return;
     group.slides.splice(slideIdx, 1);
@@ -300,218 +414,47 @@
     }
   }
 
-  function toggleSlideLayer(
-    slide: LcdSlide,
-    slotKey: string,
-    checked: boolean,
-  ): void {
-    if (checked) {
-      if (!slide.visibleLayers.includes(slotKey)) {
-        slide.visibleLayers = [...slide.visibleLayers, slotKey];
-      }
-    } else {
-      slide.visibleLayers = slide.visibleLayers.filter((k) => k !== slotKey);
-    }
-  }
+  // --- Action Step & Preview Simulation Handlers ---
 
-  function setSlideLayerOverride(
-    slide: LcdSlide,
-    slotKey: string,
-    rawValue: string,
-  ): void {
-    if (!rawValue) {
-      delete slide.layerOverrides?.[slotKey];
-      return;
-    }
-    if (!slide.layerOverrides) slide.layerOverrides = {};
-    slide.layerOverrides[slotKey] = Number(rawValue);
-  }
-
-  // --- Audio & Action Step Handlers ---
-
-  function playAudioSequence(targetId?: string): void {
-    if (previewAudioPlayer) {
-      previewAudioPlayer.pause();
-      previewAudioPlayer = null;
-    }
-    const { urls } = resolveAudioSequence(preset, audioUrls, targetId);
-    if (urls.length === 0) return;
-
-    let currentIdx = 0;
-    const playNext = () => {
-      if (currentIdx >= urls.length) return;
-      previewAudioPlayer = new Audio(urls[currentIdx++]);
-      previewAudioPlayer.muted = isMuted;
-      previewAudioPlayer.onended = playNext;
-      previewAudioPlayer
-        .play()
-        .catch((err) => console.error("Audio Play Error:", err));
-    };
-    playNext();
-  }
-
-  function addAudioGroup(): void {
-    if (!preset.audioGroups) preset.audioGroups = {};
-    const nextNo = getNextGroupNumber(preset.audioGroups);
-    preset.audioGroups[nextNo] = {
-      name: `音声グループ #${nextNo}`,
-      audioIds: [""],
-    };
-  }
-
-  function renumberActionSteps(): void {
-    preset.actions.forEach((step, idx) => {
-      step.stepNo = idx + 1;
-    });
-  }
-
-  function addActionStep(): void {
-    const isFirst = preset.actions.length === 0;
-    const defaultGroupNo = Number(Object.keys(preset.lcdGroups)[0] ?? 1);
-
-    preset.actions.push({
-      stepNo: preset.actions.length + 1,
-      label: isFirst ? "始発待機" : "次停留所案内",
-      setStopIndex: isFirst ? 0 : undefined,
-      setLcdGroupNo: isFirst ? defaultGroupNo : undefined,
-      setLayers: isFirst ? { stop: 0, fare: 0 } : { stop: "+1" },
-      playAudioId: undefined,
-    });
-  }
-
-  function duplicateActionStep(idx: number): void {
-    const source = preset.actions[idx];
-    if (!source) return;
-    const clone: ActionStep = JSON.parse(JSON.stringify(source));
-    preset.actions.splice(idx + 1, 0, clone);
-    renumberActionSteps();
-  }
-
-  function moveActionStep(idx: number, direction: -1 | 1): void {
-    const targetIdx = idx + direction;
-    if (targetIdx < 0 || targetIdx >= preset.actions.length) return;
-    const temp = preset.actions[idx];
-    preset.actions[idx] = preset.actions[targetIdx];
-    preset.actions[targetIdx] = temp;
-    renumberActionSteps();
-  }
-
-  function removeActionStep(idx: number): void {
-    preset.actions.splice(idx, 1);
-    renumberActionSteps();
-  }
-
-  function updateStepLayerValue(
-    step: ActionStep,
-    slotKey: string,
-    val: number | "+1" | null | undefined,
-  ): void {
-    if (!step.setLayers) step.setLayers = {};
-    if (val === undefined) {
-      delete step.setLayers[slotKey];
-    } else {
-      step.setLayers[slotKey] = val;
-    }
-  }
-
+  /**
+   * 指定インデックスまでのステップを畳み込み、LCDプレビューと音声再生をテストする
+   * @param targetIdx テスト対象のステップインデックス
+   */
   function simulateStepAt(targetIdx: number): void {
     activePreviewStepIdx = targetIdx;
-    const resolved = resolveActionStateUpTo(preset, targetIdx);
+    const resolved = PresetService.resolveStateUpTo(preset, targetIdx);
     previewGroupNo = resolved.lcdGroupNo;
     previewSlideIdx = 0;
     previewLayerIndices = resolved.layerIndices;
 
-    playAudioSequence(preset.actions[targetIdx]?.playAudioId);
+    previewPlayer.playFromPreset(
+      preset,
+      audioUrls,
+      preset.actions[targetIdx]?.playAudioId,
+    );
   }
 
-  function generateStepsFromCsv(): void {
-    if (masterStops.length === 0) return;
-
-    const linkedLayerKeys = Object.entries(preset.layerSlots)
-      .filter(([, slot]) => slot.linkedToCsvStop)
-      .map(([key]) => key);
-
-    const initLayers: Record<string, number> = {};
-    for (const key of Object.keys(preset.layerSlots)) {
-      initLayers[key] = 0;
-    }
-
-    const advanceLayers: Record<string, "+1"> = {};
-    for (const key of linkedLayerKeys) {
-      advanceLayers[key] = "+1";
-    }
-
-    const generated: ActionStep[] = [];
-
-    if (macroPattern === "1-step") {
-      masterStops.forEach((stopName, sIdx) => {
-        if (sIdx === 0) {
-          generated.push({
-            stepNo: 1,
-            label: "業務放送",
-            setStopIndex: 0,
-            setLcdGroupNo: macroRunningGroupNo,
-            setLayers: { ...initLayers },
-          });
-        } else {
-          generated.push({
-            stepNo: 1,
-            label: `案内: ${stopName}`,
-            setStopIndex: "+1",
-            setLayers: { ...advanceLayers },
-          });
-        }
-      });
-    } else {
-      masterStops.forEach((stopName, sIdx) => {
-        if (sIdx === 0) {
-          generated.push({
-            stepNo: 1,
-            label: `${stopName} (ドア開)`,
-            setStopIndex: 0,
-            setLcdGroupNo: macroStoppingGroupNo ?? macroRunningGroupNo,
-            setLayers: { ...initLayers },
-            playAudioId: macroArriveAudioId,
-          });
-          generated.push({
-            stepNo: 1,
-            label: `${stopName} (ドア閉)`,
-            playAudioId: macroCloseAudioId,
-          });
-        } else {
-          generated.push({
-            stepNo: 1,
-            label: `案内: ${stopName}`,
-            setStopIndex: "+1",
-            setLcdGroupNo: macroRunningGroupNo,
-            setLayers: { ...advanceLayers },
-          });
-          generated.push({
-            stepNo: 1,
-            label: `${stopName} (ドア開)`,
-            setLcdGroupNo: macroStoppingGroupNo,
-            playAudioId: macroArriveAudioId,
-          });
-          if (sIdx < masterStops.length - 1) {
-            generated.push({
-              stepNo: 1,
-              label: `${stopName} (ドア閉)`,
-              playAudioId: macroCloseAudioId,
-            });
-          }
-        }
-      });
-    }
-
-    preset.actions = generated;
-    renumberActionSteps();
+  /**
+   * マクロ設定に基づきCSV停留所から全アクションステップを一括生成する
+   */
+  function handleGenerateStepsFromCsv(): void {
+    PresetService.generateStepsFromCsv(preset, masterStops, {
+      pattern: macroPattern,
+      runningGroupNo: macroRunningGroupNo,
+      stoppingGroupNo: macroStoppingGroupNo,
+      arriveAudioId: macroArriveAudioId,
+      closeAudioId: macroCloseAudioId,
+    });
     expandedStepIdx = null;
   }
 
-  // --- Archive Export / Import ---
+  // --- Archive Export / Import Handlers ---
 
-  async function handleExport(): Promise<boolean> {
-    return saveMchrnArchive({
+  /**
+   * 編集中のプリセットを `.mchrn` ファイルとして保存する
+   */
+  async function handleExport(): Promise<void> {
+    await ArchiveService.saveMchrn({
       preset,
       timetableCsv,
       imageBlobs,
@@ -519,22 +462,26 @@
     });
   }
 
+  /**
+   * `.mchrn` ファイルを読み込んでエディタの状態を置き換える
+   * @param files 選択されたFileList
+   */
   async function handleImport(files: FileList): Promise<void> {
     const file = files[0];
     if (!file) return;
-    const loaded = await importMchrnArchive(file);
-    if (!loaded.preset.audioGroups) loaded.preset.audioGroups = {};
+    const loaded = await ArchiveService.importMchrn(file);
     preset = loaded.preset;
     timetableCsv = loaded.timetableCsv;
     imageBlobs = loaded.imageBlobs;
     imageUrls = loaded.imageUrls;
     audioBlobs = loaded.audioBlobs;
     audioUrls = loaded.audioUrls;
-    registerAudioBlobsToRust(loaded.audioBlobs);
+    await LcdSyncService.registerAudioBlobs(loaded.audioBlobs);
   }
 
   // --- Effects ---
 
+  /** ループ再生テスト中のスライド自動送りタイマー */
   $effect(() => {
     if (!isLoopPreviewing) return;
     const group = preset.lcdGroups[previewGroupNo];
@@ -557,8 +504,9 @@
     return () => clearTimeout(timer);
   });
 
+  /** プレビュー状態のRust側OBSサーバーへのリアルタイム同期 */
   $effect(() => {
-    syncLcdStateToRust({
+    LcdSyncService.syncState({
       preset,
       groupNo: previewGroupNo,
       slideIdx: previewSlideIdx,
@@ -567,11 +515,9 @@
     });
   });
 
+  /** 親コンポーネントのミュート状態の反映 */
   $effect(() => {
-    const muted = isMuted;
-    if (previewAudioPlayer) {
-      previewAudioPlayer.muted = muted;
-    }
+    previewPlayer.setMuted(isMuted);
   });
 </script>
 
@@ -592,7 +538,7 @@
       accept=".mchrn,.zip"
       onselect={handleImport}
     />
-    <button class="primary" onclick={handleExport}>
+    <button type="button" class="primary" onclick={handleExport}>
       <i>save</i>
       <span>保存 (.mchrn)</span>
     </button>
@@ -655,7 +601,7 @@
             onselect={handleImageRegister}
           />
           <div class="space"></div>
-          {#each Object.entries(preset.images) as [hashId, asset]}
+          {#each Object.entries(preset.images) as [hashId, asset] (hashId)}
             <div class="row item-row">
               <code class="small-text">{hashId.slice(0, 8)}</code>
               <span class="max">{asset.originalName}</span>
@@ -667,6 +613,7 @@
                 onselect={(files) => handleImageReplace(hashId, files)}
               />
               <button
+                type="button"
                 class="small transparent circle error-text"
                 onclick={() => handleImageRemove(hashId)}
                 title="画像を削除"
@@ -687,11 +634,13 @@
             onselect={handleAudioRegister}
           />
           <div class="space"></div>
-          {#each Object.entries(preset.audios) as [hashId, asset]}
+          {#each Object.entries(preset.audios) as [hashId, asset] (hashId)}
             <div class="row item-row">
               <button
+                type="button"
                 class="small transparent circle"
-                onclick={() => playAudioSequence(hashId)}
+                onclick={() =>
+                  previewPlayer.playFromPreset(preset, audioUrls, hashId)}
                 title="試聴"
               >
                 <i>volume_up</i>
@@ -706,6 +655,7 @@
                 onselect={(files) => handleAudioReplace(hashId, files)}
               />
               <button
+                type="button"
                 class="small transparent circle error-text"
                 onclick={() => handleAudioRemove(hashId)}
                 title="音声を削除"
@@ -720,12 +670,16 @@
             <h6 class="max no-margin">
               音声グループ (チャイム＋放送などの連続再生セット)
             </h6>
-            <button class="small border" onclick={addAudioGroup}>
+            <button
+              type="button"
+              class="small border"
+              onclick={handleAddAudioGroup}
+            >
               <i>add</i>
               <span>グループ追加</span>
             </button>
           </div>
-          {#each Object.entries(preset.audioGroups ?? {}) as [gNo, grp]}
+          {#each Object.entries(preset.audioGroups ?? {}) as [gNo, grp] (gNo)}
             <article class="border top-margin">
               <div class="row wrap-row">
                 <span class="bold">#{gNo}</span>
@@ -737,13 +691,20 @@
                   />
                 </div>
                 <button
+                  type="button"
                   class="small border"
-                  onclick={() => playAudioSequence(`group:${gNo}`)}
+                  onclick={() =>
+                    previewPlayer.playFromPreset(
+                      preset,
+                      audioUrls,
+                      `group:${gNo}`,
+                    )}
                 >
                   <i>play_arrow</i>
                   <span>連続試聴</span>
                 </button>
                 <button
+                  type="button"
                   class="small border"
                   onclick={() => (grp.audioIds = [...grp.audioIds, ""])}
                 >
@@ -751,29 +712,23 @@
                   <span>音声追加</span>
                 </button>
                 <button
+                  type="button"
                   class="small transparent circle error-text"
                   onclick={() => delete preset.audioGroups?.[gNo]}
                 >
                   <i>delete</i>
                 </button>
               </div>
-              {#each grp.audioIds as _, aIdx}
+              {#each grp.audioIds as _, aIdx (aIdx)}
                 <div class="row item-row top-margin">
                   <span>{aIdx + 1}.</span>
                   <Dropdown
                     full={true}
                     bind:value={grp.audioIds[aIdx]}
-                    options={[
-                      { value: "", label: "-- 音声を選択 --" },
-                      ...Object.entries(preset.audios).map(
-                        ([audId, asset]) => ({
-                          value: audId,
-                          label: `${asset.originalName} (${audId.slice(0, 6)})`,
-                        }),
-                      ),
-                    ]}
+                    options={singleAudioOptions}
                   />
                   <button
+                    type="button"
                     class="small transparent circle"
                     onclick={() => grp.audioIds.splice(aIdx, 1)}
                   >
@@ -788,7 +743,7 @@
 
       <!-- タブ2: レイヤースロット設定 -->
       {#if activeTab === "layers"}
-        {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
+        {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
           <article class="border padding top-margin">
             <div class="row wrap-row">
               <h6 class="max no-margin">
@@ -799,8 +754,9 @@
                 <span>CSV停留所と連動</span>
               </label>
               <button
+                type="button"
                 class="small transparent circle"
-                onclick={() => removeLayerSlot(slotKey)}
+                onclick={() => handleRemoveLayerSlot(slotKey)}
               >
                 <i>delete</i>
               </button>
@@ -808,11 +764,12 @@
 
             <div class="row wrap-row top-margin">
               <button
+                type="button"
                 class="small border"
                 onclick={() => {
                   const nums = Object.keys(slot.items)
                     .map(Number)
-                    .filter((n) => !isNaN(n));
+                    .filter((n) => !Number.isNaN(n));
                   const nextNo = nums.length > 0 ? Math.max(...nums) + 1 : 0;
                   slot.items[String(nextNo)] = "";
                 }}
@@ -822,6 +779,7 @@
               </button>
               {#if slot.linkedToCsvStop && masterStops.length > 0}
                 <button
+                  type="button"
                   class="small border"
                   onclick={() => syncSlotItemsWithCsv(slotKey)}
                 >
@@ -833,7 +791,7 @@
 
             <div class="space"></div>
 
-            {#each Object.entries(slot.items) as [no]}
+            {#each Object.keys(slot.items) as no (no)}
               <div class="row item-row">
                 <span class="bold">#{no}</span>
                 {#if slot.linkedToCsvStop && masterStops[Number(no)]}
@@ -847,6 +805,7 @@
                   options={imageOptions}
                 />
                 <button
+                  type="button"
                   class="small transparent circle"
                   onclick={() => delete slot.items[no]}
                 >
@@ -869,7 +828,7 @@
             <label>表示名</label>
           </div>
           <div class="space"></div>
-          <button class="primary" onclick={addLayerSlot}>
+          <button type="button" class="primary" onclick={handleAddLayerSlot}>
             <i>add</i>
             <span>スロット追加</span>
           </button>
@@ -887,14 +846,15 @@
               options={lcdGroupOptions}
               onchange={() => (previewSlideIdx = 0)}
             />
-            <button class="primary" onclick={addLcdGroup}>
+            <button type="button" class="primary" onclick={handleAddLcdGroup}>
               <i>add</i>
               <span>新規</span>
             </button>
             {#if Object.keys(preset.lcdGroups).length > 1}
               <button
+                type="button"
                 class="border error-text"
-                onclick={() => removeLcdGroup(previewGroupNo)}
+                onclick={() => handleRemoveLcdGroup(previewGroupNo)}
               >
                 <i>delete</i>
               </button>
@@ -913,7 +873,11 @@
                 <input type="checkbox" bind:checked={currentGroup.loop} />
                 <span>スライドをループ再生する</span>
               </label>
-              <button class="border" onclick={() => addSlide(previewGroupNo)}>
+              <button
+                type="button"
+                class="border"
+                onclick={() => handleAddSlide(previewGroupNo)}
+              >
                 <i>add_photo_alternate</i>
                 <span>スライド追加</span>
               </button>
@@ -924,7 +888,7 @@
         <!-- 選択中グループ内のスライド一覧 -->
         {#if preset.lcdGroups[previewGroupNo]}
           {@const currentGroup = preset.lcdGroups[previewGroupNo]}
-          {#each currentGroup.slides as slide, sIdx}
+          {#each currentGroup.slides as slide, sIdx (sIdx)}
             <article
               class="border padding top-margin"
               class:fill={previewSlideIdx === sIdx}
@@ -943,10 +907,11 @@
                 </div>
                 {#if currentGroup.slides.length > 1}
                   <button
+                    type="button"
                     class="small transparent circle"
                     onclick={(e) => {
                       e.stopPropagation();
-                      removeSlide(previewGroupNo, sIdx);
+                      handleRemoveSlide(previewGroupNo, sIdx);
                     }}
                   >
                     <i>delete</i>
@@ -966,7 +931,7 @@
               <p class="bold no-margin">
                 重ねるレイヤー（チェック順＝下から重ねる順）:
               </p>
-              {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
+              {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
                 {@const isVisible = slide.visibleLayers.includes(slotKey)}
                 <div class="row wrap-row">
                   <label class="checkbox max">
@@ -974,7 +939,7 @@
                       type="checkbox"
                       checked={isVisible}
                       onchange={(e) =>
-                        toggleSlideLayer(
+                        PresetService.toggleSlideLayer(
                           slide,
                           slotKey,
                           e.currentTarget.checked,
@@ -991,7 +956,7 @@
                         placeholder="連動"
                         value={slide.layerOverrides?.[slotKey] ?? ""}
                         oninput={(e) =>
-                          setSlideLayerOverride(
+                          PresetService.setSlideLayerOverride(
                             slide,
                             slotKey,
                             e.currentTarget.value,
@@ -1083,7 +1048,11 @@
                   ? masterStops.length
                   : masterStops.length * 3 - 1}ステップ)
               </span>
-              <button class="border" onclick={generateStepsFromCsv}>
+              <button
+                type="button"
+                class="border"
+                onclick={handleGenerateStepsFromCsv}
+              >
                 <i>auto_awesome</i>
                 <span>全停留所分を一括生成</span>
               </button>
@@ -1098,9 +1067,10 @@
               アクションステップ一覧 ({preset.actions.length}件)
             </h6>
             <button
+              type="button"
               class="primary"
               onclick={() => {
-                addActionStep();
+                PresetService.addActionStep(preset);
                 expandedStepIdx = preset.actions.length - 1;
               }}
             >
@@ -1111,13 +1081,12 @@
         </article>
 
         <!-- コンパクト折りたたみ式ステップリスト -->
-        {#each preset.actions as step, idx}
+        {#each preset.actions as step, idx (step.stepNo)}
           {@const isExpanded = expandedStepIdx === idx}
           <article
             class="border top-margin step-card"
             class:fill={activePreviewStepIdx === idx}
           >
-            <!-- 常時表示の1行ヘッダー（クリックで詳細を開閉） -->
             <div
               class="row wrap-row step-header"
               onclick={() => (expandedStepIdx = isExpanded ? null : idx)}
@@ -1140,9 +1109,9 @@
                 <span class="chip small"><i>volume_up</i></span>
               {/if}
 
-              <!-- 操作ボタン群（クリックイベントの伝播を止めて開閉と干渉させない） -->
               <div class="row no-space" onclick={(e) => e.stopPropagation()}>
                 <button
+                  type="button"
                   class="small border"
                   onclick={() => simulateStepAt(idx)}
                 >
@@ -1150,35 +1119,38 @@
                   <span>テスト</span>
                 </button>
                 <button
+                  type="button"
                   class="small transparent circle"
                   disabled={idx === 0}
-                  onclick={() => moveActionStep(idx, -1)}
+                  onclick={() => PresetService.moveActionStep(preset, idx, -1)}
                 >
                   <i>arrow_upward</i>
                 </button>
                 <button
+                  type="button"
                   class="small transparent circle"
                   disabled={idx === preset.actions.length - 1}
-                  onclick={() => moveActionStep(idx, 1)}
+                  onclick={() => PresetService.moveActionStep(preset, idx, 1)}
                 >
                   <i>arrow_downward</i>
                 </button>
                 <button
+                  type="button"
                   class="small transparent circle"
-                  onclick={() => duplicateActionStep(idx)}
+                  onclick={() => PresetService.duplicateActionStep(preset, idx)}
                 >
                   <i>content_copy</i>
                 </button>
                 <button
+                  type="button"
                   class="small transparent circle error-text"
-                  onclick={() => removeActionStep(idx)}
+                  onclick={() => PresetService.removeActionStep(preset, idx)}
                 >
                   <i>delete</i>
                 </button>
               </div>
             </div>
 
-            <!-- 展開時のみ表示される詳細設定エリア -->
             {#if isExpanded}
               <div class="space"></div>
               <div class="field label border no-bottom-margin">
@@ -1231,14 +1203,14 @@
               <div class="space"></div>
               <p class="bold no-margin">レイヤー番号の更新:</p>
               <div class="grid">
-                {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
+                {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
                   <div class="s12 m6">
                     <Dropdown
                       full={true}
                       label={`${slot.name} (${slotKey})`}
                       value={step.setLayers?.[slotKey]}
                       onchange={(val) =>
-                        updateStepLayerValue(step, slotKey, val)}
+                        PresetService.updateStepLayerValue(step, slotKey, val)}
                       options={[
                         { value: undefined, label: "変更なし (維持)" },
                         { value: "+1", label: "次の番号へ (+1)" },
@@ -1267,6 +1239,7 @@
         <div class="row">
           <h6 class="max">LCDリアルタイムプレビュー</h6>
           <button
+            type="button"
             class="small"
             class:primary={isLoopPreviewing}
             class:border={!isLoopPreviewing}
@@ -1289,8 +1262,9 @@
         {#if preset.lcdGroups[previewGroupNo]}
           {@const grp = preset.lcdGroups[previewGroupNo]}
           <div class="row center-align top-margin">
-            {#each grp.slides as _, idx}
+            {#each grp.slides as _, idx (idx)}
               <button
+                type="button"
                 class="small circle"
                 class:fill={previewSlideIdx === idx}
                 class:border={previewSlideIdx !== idx}
@@ -1304,7 +1278,7 @@
 
         <div class="space"></div>
         <p>プレビュー用レイヤー番号切り替え:</p>
-        {#each Object.entries(preset.layerSlots) as [slotKey, slot]}
+        {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
           <div class="field label border small">
             <input
               type="number"
@@ -1320,18 +1294,15 @@
 </section>
 
 <style>
-  /* グリッド要素の横幅突き抜け防止 */
   .grid > * {
     min-width: 0;
   }
 
-  /* 折り返し可能な横並び行 */
   .wrap-row {
     flex-wrap: wrap;
     gap: 0.5rem;
   }
 
-  /* レイヤー番号行の整列 */
   .item-row {
     gap: 0.5rem;
     margin-bottom: 0.5rem;
@@ -1347,11 +1318,6 @@
 
   .number-box {
     width: 6.5rem;
-  }
-
-  /* 長いファイル名リストの折り返し */
-  ul {
-    word-break: break-all;
   }
 
   .step-card {

@@ -10,6 +10,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tiny_http::{Header, Response, Server};
 
+/// OBSブラウザソースへ配信するクライアントHTMLテンプレート
 const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -17,23 +18,33 @@ const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
   <title>Machirun OBS LCD</title>
   <style>
     body, html {
-      margin: 0; padding: 0; width: 100vw; height: 100vh;
-      background: #000; overflow: hidden; display: flex;
-      align-items: center; justify-content: center;
+      align-items: center;
+      background: #000;
+      display: flex;
+      height: 100vh;
+      justify-content: center;
+      margin: 0;
+      overflow: hidden;
+      padding: 0;
+      width: 100vw;
     }
     #lcd-stage {
-      position: relative; width: 100vw; height: 56.25vw;
-      max-height: 100vh; max-width: 177.78vh;
-      background: #000; overflow: hidden;
+      background: #000;
+      height: 56.25vw;
+      max-height: 100vh;
+      max-width: 177.78vh;
+      overflow: hidden;
+      position: relative;
+      width: 100vw;
     }
     .lcd-layer {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      object-fit: contain; pointer-events: none;
-    }
-    .waiting {
-      color: #fff; font-family: sans-serif; text-align: center;
-      position: absolute; inset: 0; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; opacity: 0.7;
+      height: 100%;
+      left: 0;
+      object-fit: contain;
+      pointer-events: none;
+      position: absolute;
+      top: 0;
+      width: 100%;
     }
   </style>
 </head>
@@ -124,6 +135,7 @@ const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
 </body>
 </html>"#;
 
+/// ローカルHTTPサーバーで保持・配信するLCDおよび音声の同期状態
 #[derive(Clone, Serialize, Deserialize, Default)]
 struct LcdServerState {
     preset: Option<serde_json::Value>,
@@ -136,12 +148,15 @@ struct LcdServerState {
 }
 
 lazy_static! {
+    /// フロントエンドから同期された最新のLCD表示状態
     static ref LCD_STATE: Arc<Mutex<LcdServerState>> =
         Arc::new(Mutex::new(LcdServerState::default()));
+    /// フロントエンドから登録された音声バイナリのキャッシュ
     static ref AUDIO_BLOBS_CACHE: Arc<Mutex<HashMap<String, Vec<u8>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 }
 
+/// フロントエンドのLCD状態をRust側のメモリへ同期するTauriコマンド
 #[tauri::command]
 fn sync_lcd_to_rust(state: LcdServerState) {
     if let Ok(mut locked) = LCD_STATE.lock() {
@@ -149,6 +164,7 @@ fn sync_lcd_to_rust(state: LcdServerState) {
     }
 }
 
+/// 音声バイナリ一式をRust側のメモリキャッシュへ登録するTauriコマンド
 #[tauri::command]
 fn register_audio_blobs(blobs: HashMap<String, Vec<u8>>) {
     if let Ok(mut locked) = AUDIO_BLOBS_CACHE.lock() {
@@ -156,6 +172,7 @@ fn register_audio_blobs(blobs: HashMap<String, Vec<u8>>) {
     }
 }
 
+/// ネイティブのファイル保存ダイアログを開き、`.mchrn` バイナリを書き出すTauriコマンド
 #[tauri::command]
 fn save_mchrn_file(default_name: String, data: Vec<u8>) -> Result<String, String> {
     let file = rfd::FileDialog::new()
@@ -171,12 +188,14 @@ fn save_mchrn_file(default_name: String, data: Vec<u8>) -> Result<String, String
     }
 }
 
+/// CORSヘッダーとContent-Typeを付与したHTTPレスポンスを生成する
 fn build_response(data: Vec<u8>, content_type: &[u8]) -> Response<Cursor<Vec<u8>>> {
     Response::from_data(data)
         .with_header(Header::from_bytes(&b"Content-Type"[..], content_type).unwrap())
         .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
 }
 
+/// OBSブラウザソース向けのローカルHTTPサーバー (`127.0.0.1:14280`) を別スレッドで起動する
 fn spawn_lcd_http_server() {
     thread::spawn(|| {
         let server = match Server::http("127.0.0.1:14280") {
@@ -219,6 +238,7 @@ fn spawn_lcd_http_server() {
     });
 }
 
+/// 左右矢印キーのグローバル入力を監視し、フロントエンドへイベントを発火するスレッドを起動する
 fn spawn_global_key_listener(app_handle: AppHandle) {
     thread::spawn(move || {
         let device_state = DeviceState::new();
@@ -244,6 +264,7 @@ fn spawn_global_key_listener(app_handle: AppHandle) {
     });
 }
 
+/// Tauriアプリケーションを初期化して実行するエントリーポイント
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     spawn_lcd_http_server();

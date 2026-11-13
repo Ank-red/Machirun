@@ -1,8 +1,10 @@
 <script lang="ts">
   // --- Imports ---
+
   import type { Snippet } from "svelte";
 
   // --- Props ---
+
   let {
     title = "Machirun",
     children,
@@ -27,10 +29,10 @@
 
 <style>
   .title-switch {
-    display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
     cursor: pointer;
+    display: inline-flex;
+    gap: 0.4rem;
     user-select: none;
   }
 

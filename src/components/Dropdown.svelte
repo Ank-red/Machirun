@@ -1,4 +1,6 @@
 <script lang="ts" generics="T">
+  // --- Props ---
+
   let {
     value = $bindable(),
     options,
@@ -13,21 +15,35 @@
     onchange?: (val: T) => void;
   } = $props();
 
+  // --- State & Derived ---
+
+  /** ドロップダウン外枠のDOM参照 */
   let containerEl: HTMLDivElement;
+
+  /** メニューを上方向に開くかどうかの状態 */
   let openUpward = $state(false);
 
+  /** 現在選択されている項目の表示ラベル */
   let selectedLabel = $derived(
     options.find((o) => o.value === value)?.label ?? String(value ?? ""),
   );
 
+  // --- Handlers & Methods ---
+
+  /**
+   * 画面下部の余白を計算し、メニューの展開方向（上下）を更新する
+   */
   function updateDirection(): void {
     if (!containerEl) return;
     const rect = containerEl.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
-    // 下側の余白が260px未満かつ上側に余裕がある場合は上方向に開く
     openUpward = spaceBelow < 260 && rect.top > spaceBelow;
   }
 
+  /**
+   * 項目を選択し、バインド値とコールバックを更新してフォーカスを外す
+   * @param val 選択された値
+   */
   function selectItem(val: T): void {
     value = val;
     onchange?.(val);
@@ -50,14 +66,14 @@
   >
     <span class="dropdown-sizer">
       <span class="dropdown-text">{selectedLabel}</span>
-      {#each options as opt}
+      {#each options as opt (opt.label)}
         <span class="dropdown-ghost" aria-hidden="true">{opt.label}</span>
       {/each}
     </span>
     <i>arrow_drop_down</i>
   </button>
   <menu class="dropdown-menu" class:open-up={openUpward}>
-    {#each options as opt}
+    {#each options as opt (opt.label)}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <li
@@ -72,37 +88,37 @@
 
 <style>
   .dropdown-container {
-    position: relative;
     display: inline-flex;
     flex-direction: column;
-    min-width: 0;
     max-width: 100%;
+    min-width: 0;
+    position: relative;
   }
 
   .dropdown-container.full-width {
     display: flex;
-    width: 100%;
     flex: 1 1 0%;
+    width: 100%;
   }
 
   .dropdown-label {
     font-size: 0.75rem;
-    opacity: 0.85;
     margin-bottom: 0.2rem;
-    padding-left: 0.25rem;
-    white-space: nowrap;
+    opacity: 0.85;
     overflow: hidden;
+    padding-left: 0.25rem;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .dropdown-button {
-    display: flex;
     align-items: center;
+    display: flex;
     justify-content: space-between;
-    width: 100%;
-    min-width: 0;
-    max-width: 100%;
     margin: 0;
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
   }
 
   .dropdown-sizer {
@@ -121,10 +137,10 @@
   }
 
   .dropdown-ghost {
-    visibility: hidden;
     height: 0;
     pointer-events: none;
     user-select: none;
+    visibility: hidden;
   }
 
   .dropdown-menu {
@@ -134,8 +150,8 @@
   }
 
   .dropdown-menu.open-up {
-    top: auto !important;
     bottom: calc(100% + 0.25rem) !important;
+    top: auto !important;
     transform: none !important;
   }
 </style>

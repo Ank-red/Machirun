@@ -1,119 +1,145 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  // --- Imports ---
+
   import { listen } from "@tauri-apps/api/event";
-  import {
-    createDefaultPreset,
-    resolveActionStateUpTo,
-    resolveAudioSequence,
-  } from "./lib/preset";
-  import { parseOptDiaCsv, getTodayTrips } from "./lib/timetable";
-  import { importMchrnArchive, type LoadedArchive } from "./lib/archive";
-  import {
-    syncLcdStateToRust,
-    registerAudioBlobsToRust,
-  } from "./lib/lcdChannel";
-  import Header from "./lib/Header.svelte";
-  import Dropdown from "./lib/Dropdown.svelte";
-  import FileButton from "./lib/FileButton.svelte";
-  import PresetEditor from "./lib/PresetEditor.svelte";
-  import SoftwareInfo from "./lib/SoftwareInfo.svelte";
+  import { onMount } from "svelte";
+  import Dropdown from "./components/Dropdown.svelte";
+  import FileButton from "./components/FileButton.svelte";
+  import Header from "./components/Header.svelte";
+  import { ArchiveService } from "./core/archive";
+  import { AudioPlayerService } from "./core/audioPlayer";
+  import { IS_TAURI, LcdSyncService } from "./core/lcdSync";
+  import { PresetService } from "./core/preset";
+  import { TimetableService } from "./core/timetable";
+  import type { LayerOperationValue, LoadedPresetItem } from "./core/types";
+  import DownloadView from "./views/Download.svelte";
+  import DriverView from "./views/Driver.svelte";
+  import EditorView from "./views/Editor.svelte";
+  import InfoView from "./views/Info.svelte";
 
-  const isTauri = "__TAURI_INTERNALS__" in window;
-  const isDev = import.meta.env.DEV;
+  // --- Constants & Services ---
 
-  interface LoadedPresetItem extends LoadedArchive {
-    id: string;
-    fileName: string;
-  }
+  /** 開発モード判定フラグ */
+  const IS_DEV = import.meta.env.DEV;
+
+  /** 車載器運行用の音声プレイヤーインスタンス */
+  const driverAudioPlayer = new AudioPlayerService();
 
   // --- View & Preset Collection State ---
+
+  /** 現在選択されている画面ビュー */
   let currentView = $state<"driver" | "editor" | "info">("driver");
+
+  /** 読み込み済みの `.mchrn` プリセット一覧 */
   let loadedPresets = $state<LoadedPresetItem[]>([]);
+
+  /** 現在アクティブなプリセットのID */
   let activePresetId = $state<string>("");
 
+  /** 現在アクティブなプリセットアイテム */
   let activeItem = $derived(
     loadedPresets.find((p) => p.id === activePresetId) ??
       loadedPresets[0] ??
       null,
   );
 
-  let preset = $derived(activeItem?.preset ?? createDefaultPreset());
+  /** アクティブなプリセット構造 */
+  let preset = $derived(activeItem?.preset ?? PresetService.createDefault());
+
+  /** アクティブなダイヤグラムCSV文字列 */
   let timetableCsv = $derived(activeItem?.timetableCsv ?? "");
+
+  /** アクティブな画像バイナリマップ */
   let imageBlobs = $derived(activeItem?.imageBlobs ?? {});
+
+  /** アクティブな音声バイナリマップ */
   let audioBlobs = $derived(activeItem?.audioBlobs ?? {});
+
+  /** アクティブな音声Object URLマップ */
   let audioUrls = $derived(activeItem?.audioUrls ?? {});
 
   // --- Driver Operation State ---
+
+  /** 選択中の運行便インデックス */
   let selectedTripIdx = $state<number>(0);
+
+  /** 現在の停留所インデックス */
   let currentStopIdx = $state<number>(0);
+
+  /** 現在のアクションステップインデックス（-1は運行準備中） */
   let currentActionIdx = $state<number>(-1);
+
+  /** OBS側で再生トリガーをかける先頭音声ファイル名 */
   let currentPlayingAudioFile = $state<string>("");
+
+  /** OBS側の音声再生トリガー用カウンタ */
   let audioNonce = $state<number>(0);
+
+  /** 現在表示中のLCDグループ番号 */
   let activeLcdGroupNo = $state<string>("1");
+
+  /** 現在表示中のLCDスライドインデックス */
   let activeLcdSlideIdx = $state<number>(0);
-  let activeLayerIndices = $state<Record<string, number | "+1" | null>>({
+
+  /** 現在の各レイヤースロット番号マップ */
+  let activeLayerIndices = $state<Record<string, LayerOperationValue>>({
     stop: 0,
     fare: 0,
   });
+
+  /** 現在時刻 */
   let now = $state<Date>(new Date());
-  let activeAudioPlayer: HTMLAudioElement | null = null;
+
+  /** アプリ全体のミュート状態 */
   let isMuted = $state<boolean>(false);
 
-  // --- Release Download URLs (Web Only) ---
-  let releaseUrls = $state({
-    windows: "#",
-    rpm: "#",
-    deb: "#",
-    appImage: "#",
-  });
-
   // --- Derived Timetable & Step Data ---
-  let hasPresetActions = $derived(preset.actions.length > 0);
-  let currentActionStep = $derived(preset.actions[currentActionIdx] ?? null);
 
+  /** プリセットにアクションステップが存在するかどうか */
+  let hasPresetActions = $derived(preset.actions.length > 0);
+
+  /** CSVからパースされた全運行便データ */
   let rawTrips = $derived.by(() => {
-    if (!timetableCsv) return [];
     try {
-      return parseOptDiaCsv(timetableCsv);
+      return TimetableService.parseOptDiaCsv(timetableCsv);
     } catch (err) {
       console.error("CSV Parse Error:", err);
       return [];
     }
   });
 
-  let activeTrips = $derived(getTodayTrips(rawTrips, now));
+  /** 当日運行対象の便リスト */
+  let activeTrips = $derived(TimetableService.getTodayTrips(rawTrips, now));
+
+  /** 現在選択されている便データ */
   let currentTrip = $derived(activeTrips[selectedTripIdx] ?? null);
+
+  /** 現在表示中の停留所スケジュール */
   let currentStop = $derived(currentTrip?.stops[currentStopIdx] ?? null);
 
   // --- Handlers & Methods ---
 
-  function stopAudioPlayback(): void {
-    if (activeAudioPlayer) {
-      activeAudioPlayer.pause();
-      activeAudioPlayer = null;
-    }
-  }
-
+  /**
+   * 車載器の運行状態を初期（運行準備中）へリセットする
+   */
   function resetOperationState(): void {
-    stopAudioPlayback();
+    driverAudioPlayer.stop();
     selectedTripIdx = 0;
     currentActionIdx = -1;
     currentStopIdx = 0;
     activeLcdGroupNo = Object.keys(preset.lcdGroups)[0] ?? "1";
     activeLcdSlideIdx = 0;
-    const initialLayers: Record<string, number | null> = {};
-    for (const key of Object.keys(preset.layerSlots)) {
-      initialLayers[key] = 0;
-    }
-    activeLayerIndices = initialLayers;
+    activeLayerIndices = PresetService.createInitialLayerIndices(preset);
   }
 
+  /**
+   * 複数の `.mchrn` ファイルを読み込んでリストへ追加する
+   * @param files 選択されたFileList
+   */
   async function handleLoadPresetFiles(files: FileList): Promise<void> {
     for (const file of Array.from(files)) {
       try {
-        const loaded = await importMchrnArchive(file);
-        if (!loaded.preset.audioGroups) loaded.preset.audioGroups = {};
-
+        const loaded = await ArchiveService.importMchrn(file);
         const id = crypto.randomUUID().slice(0, 8);
         loadedPresets = [
           ...loadedPresets,
@@ -129,27 +155,30 @@
     resetOperationState();
   }
 
+  /**
+   * ミュート状態を切り替える
+   */
   function toggleMute(): void {
     isMuted = !isMuted;
-    if (activeAudioPlayer) {
-      activeAudioPlayer.muted = isMuted;
-    }
+    driverAudioPlayer.setMuted(isMuted);
   }
 
+  /**
+   * ステップの音声を再生し、OBS（Rustサーバー）側へも再生トリガーを同期する
+   * @param targetId 再生対象の音声IDまたはグループID
+   */
   function playStepAudio(targetId?: string): void {
-    stopAudioPlayback();
-    const { urls, firstFileName } = resolveAudioSequence(
+    const firstFileName = driverAudioPlayer.playFromPreset(
       preset,
       audioUrls,
       targetId,
     );
 
-    // ミュート状態に関わらず、OBS（Rustサーバー）側へは常に再生トリガーを送る
     if (firstFileName) {
       const isStandby = hasPresetActions && currentActionIdx === -1;
       currentPlayingAudioFile = firstFileName;
       audioNonce++;
-      syncLcdStateToRust({
+      LcdSyncService.syncState({
         preset: isStandby ? null : preset,
         groupNo: activeLcdGroupNo,
         slideIdx: activeLcdSlideIdx,
@@ -159,33 +188,24 @@
         audioNonce: isStandby ? 0 : audioNonce,
       });
     }
-
-    if (urls.length === 0) return;
-
-    let idx = 0;
-    const playNext = () => {
-      if (idx >= urls.length) return;
-      activeAudioPlayer = new Audio(urls[idx++]);
-      activeAudioPlayer.muted = isMuted; // 現在のミュート状態を反映
-      activeAudioPlayer.onended = playNext;
-      activeAudioPlayer
-        .play()
-        .catch((err) => console.error("Audio Play Error:", err));
-    };
-    playNext();
   }
 
+  /**
+   * 指定インデックスのアクションステップ状態を適用する
+   * @param targetIdx 適用するステップインデックス（-1で待機状態へ戻す）
+   * @param shouldPlayAudio 音声を再生するかどうか
+   */
   function applyStepAt(targetIdx: number, shouldPlayAudio: boolean): void {
     if (preset.actions.length === 0) return;
 
     if (targetIdx < 0) {
       currentActionIdx = -1;
-      const initial = resolveActionStateUpTo(preset, -1);
+      const initial = PresetService.resolveStateUpTo(preset, -1);
       currentStopIdx = initial.stopIndex;
       activeLcdGroupNo = initial.lcdGroupNo;
       activeLcdSlideIdx = 0;
       activeLayerIndices = initial.layerIndices;
-      stopAudioPlayback();
+      driverAudioPlayer.stop();
       return;
     }
 
@@ -196,7 +216,11 @@
     currentActionIdx = clampedIdx;
 
     const maxStopIdx = Math.max(0, (currentTrip?.stops.length ?? 1) - 1);
-    const resolved = resolveActionStateUpTo(preset, clampedIdx, maxStopIdx);
+    const resolved = PresetService.resolveStateUpTo(
+      preset,
+      clampedIdx,
+      maxStopIdx,
+    );
 
     currentStopIdx = resolved.stopIndex;
     if (activeLcdGroupNo !== resolved.lcdGroupNo) {
@@ -208,10 +232,13 @@
     if (shouldPlayAudio) {
       playStepAudio(preset.actions[clampedIdx]?.playAudioId);
     } else {
-      stopAudioPlayback();
+      driverAudioPlayer.stop();
     }
   }
 
+  /**
+   * アクションステップを1つ進める
+   */
   function advanceStep(): void {
     if (!currentTrip || !hasPresetActions) return;
     if (currentActionIdx < preset.actions.length - 1) {
@@ -219,6 +246,9 @@
     }
   }
 
+  /**
+   * アクションステップを1つ戻す（音声は鳴らさない）
+   */
   function retreatStep(): void {
     if (!hasPresetActions) return;
     if (currentActionIdx > -1) {
@@ -226,39 +256,16 @@
     }
   }
 
-  async function fetchLatestReleaseUrls(): Promise<void> {
-    try {
-      const res = await fetch(
-        "https://api.github.com/repos/Ank-red/Machirun/releases/latest",
-      );
-      if (!res.ok) return;
-      const data = await res.json();
-      for (const asset of data.assets ?? []) {
-        if (asset.name.endsWith("-setup.exe"))
-          releaseUrls.windows = asset.browser_download_url;
-        if (asset.name.endsWith(".rpm"))
-          releaseUrls.rpm = asset.browser_download_url;
-        if (asset.name.endsWith(".deb"))
-          releaseUrls.deb = asset.browser_download_url;
-        if (asset.name.endsWith(".AppImage"))
-          releaseUrls.appImage = asset.browser_download_url;
-      }
-    } catch (err) {
-      console.error("Failed to fetch release URLs:", err);
-    }
-  }
-
   // --- Effects & Lifecycle ---
 
-  // アクティブなプリセットの音声バイナリが変わったらRust側へ登録
+  /** アクティブなプリセットの音声バイナリが変わったらRust側へ登録 */
   $effect(() => {
-    if (!isTauri) return;
-    registerAudioBlobsToRust(audioBlobs);
+    LcdSyncService.registerAudioBlobs(audioBlobs);
   });
 
-  // 車載器モード中のLCDスライド自動ループタイマー
+  /** 車載器モード中のLCDスライド自動ループタイマー */
   $effect(() => {
-    if (!isTauri || currentView !== "driver") return;
+    if (!IS_TAURI || currentView !== "driver") return;
     const group = preset.lcdGroups[activeLcdGroupNo];
     if (!group || group.slides.length <= 1) return;
 
@@ -277,12 +284,12 @@
     return () => clearTimeout(timer);
   });
 
-  // 車載器モード中のLCD状態をRustサーバーへ同期
+  /** 車載器モード中のLCD状態をRustサーバーへ同期 */
   $effect(() => {
-    if (!isTauri || currentView !== "driver") return;
+    if (!IS_TAURI || currentView !== "driver") return;
     const isStandby = hasPresetActions && currentActionIdx === -1;
 
-    syncLcdStateToRust({
+    LcdSyncService.syncState({
       preset: isStandby ? null : preset,
       groupNo: activeLcdGroupNo,
       slideIdx: activeLcdSlideIdx,
@@ -294,10 +301,7 @@
   });
 
   onMount(() => {
-    if (!isTauri) {
-      fetchLatestReleaseUrls();
-      return;
-    }
+    if (!IS_TAURI) return;
 
     const timer = setInterval(() => {
       now = new Date();
@@ -319,27 +323,9 @@
   });
 </script>
 
-{#if !isTauri && !isDev}
-  <!-- Webブラウザで開かれた場合はデスクトップ版のダウンロード案内のみ表示 -->
-  <Header title="Machirun Driver" />
-  <main class="responsive padding">
-    <article class="border round large-padding center-align">
-      <h5>Machirun デスクトップ版</h5>
-      <p>
-        車載器システムおよび停留所エディタはデスクトップ版アプリでご利用いただけます。
-      </p>
-      <div class="space"></div>
-      <nav class="center-align wrap">
-        <a class="button fill" href={releaseUrls.windows}>Windows</a>
-        <a class="button fill" href={releaseUrls.rpm}>Fedora Linux (rpm)</a>
-        <a class="button fill" href={releaseUrls.deb}>Debian GNU/Linux (deb)</a>
-        <a class="button fill" href={releaseUrls.appImage}>Linux版 (AppImage)</a
-        >
-      </nav>
-    </article>
-  </main>
+{#if !IS_TAURI && !IS_DEV}
+  <DownloadView />
 {:else}
-  <!-- デスクトップ版（Tauri）メイン画面 -->
   <Header title="Machirun">
     <Dropdown
       bind:value={currentView}
@@ -372,6 +358,7 @@
       />
     {/if}
     <button
+      type="button"
       class="border circle"
       onclick={toggleMute}
       title={isMuted ? "ミュート解除" : "ミュート"}
@@ -389,96 +376,19 @@
 
   <main class="responsive padding">
     {#if currentView === "driver"}
-      <article class="border round center-align">
-        {#if loadedPresets.length === 0}
-          <div class="padding">
-            <h5>.mchrn プリセットファイルが読み込まれていません</h5>
-            <p class="small-text">
-              上部の「mchrn追加読込」ボタンから運行プリセットファイルを選択してください。
-            </p>
-          </div>
-        {:else if currentTrip && currentStop}
-          <div class="row center-align">
-            <div
-              class="small-width bold padding fill round center-align large-text"
-            >
-              停留所 <br />({currentStopIdx + 1} / {currentTrip.stops.length})
-            </div>
-            <h1 class="max bold center-align">{currentStop.name}</h1>
-            <h3 class="small-width bold padding fill round center-align">
-              {now.toLocaleTimeString("ja-JP", { hour12: false })}
-            </h3>
-          </div>
-
-          {#if hasPresetActions}
-            {#if currentActionIdx < 0}
-              <div class="row center-align padding">
-                <h3 class="amber-text">運行準備中</h3>
-              </div>
-            {:else if currentActionStep}
-              <span class="large-text">
-                ステップ ({currentActionIdx + 1} / {preset.actions.length}):
-                <b>{currentActionStep.label}</b>
-              </span>
-            {/if}
-          {/if}
-
-          <div class="row center-align">
-            {#if currentStop.arrival}
-              <article class="max small fill center-align middle-align">
-                <div>
-                  <h2 class="bold">予定着</h2>
-                  <h2 class="bold">{currentStop.arrival}</h2>
-                </div>
-              </article>
-            {/if}
-            {#if currentStop.departure}
-              <article class="max small fill center-align middle-align">
-                <div>
-                  <h2 class="bold">予定発</h2>
-                  <h2 class="bold">{currentStop.departure}</h2>
-                </div>
-              </article>
-            {/if}
-          </div>
-
-          <nav>
-            {#if currentActionIdx < 0}
-              <button
-                class="max extra large-text"
-                onclick={advanceStep}
-                disabled={hasPresetActions &&
-                  currentActionIdx >= preset.actions.length - 1}
-              >
-                運行開始
-              </button>
-            {:else}
-              <button
-                class="extra"
-                onclick={retreatStep}
-                disabled={hasPresetActions
-                  ? currentActionIdx === 0
-                  : currentStopIdx === 0}
-              >
-                ◀ 前へ
-              </button>
-
-              <button
-                class="max extra large-text"
-                onclick={advanceStep}
-                disabled={hasPresetActions &&
-                  currentActionIdx >= preset.actions.length - 1}
-              >
-                {preset.actions[currentActionIdx + 1]?.label ?? "終点"} ▶
-              </button>
-            {/if}
-          </nav>
-        {:else}
-          <p class="empty">本日の運行便はありません</p>
-        {/if}
-      </article>
+      <DriverView
+        hasLoadedPresets={loadedPresets.length > 0}
+        {currentTrip}
+        {currentStop}
+        {currentStopIdx}
+        {currentActionIdx}
+        actions={preset.actions}
+        {now}
+        onadvance={advanceStep}
+        onretreat={retreatStep}
+      />
     {:else if currentView === "editor" && activeItem}
-      <PresetEditor
+      <EditorView
         bind:preset={activeItem.preset}
         bind:timetableCsv={activeItem.timetableCsv}
         bind:imageBlobs={activeItem.imageBlobs}
@@ -488,7 +398,7 @@
         {isMuted}
       />
     {:else if currentView === "info"}
-      <SoftwareInfo />
+      <InfoView />
     {:else}
       <article class="border padding center-align">
         <p>

@@ -7,6 +7,7 @@ import DriverApp from "./DriverApp.svelte";
 ui("mode", "dark");
 await ui("theme", "#106f10");
 
+/** 車載器・エディタアプリケーションのマウントインスタンス */
 const app = mount(DriverApp, {
   target: document.getElementById("app")!,
 });

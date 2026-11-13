@@ -1,8 +1,10 @@
 <script lang="ts">
   // --- Imports ---
-  import type { LcdSlide, LayerSlot } from "./preset";
+
+  import type { LayerOperationValue, LayerSlot, LcdSlide } from "../core/types";
 
   // --- Props ---
+
   let {
     slide,
     layerSlots = {},
@@ -12,14 +14,17 @@
     slide?: LcdSlide;
     layerSlots?: Record<string, LayerSlot>;
     imageUrls?: Record<string, string>;
-    activeLayerIndices?: Record<string, number | "+1" | null>;
+    activeLayerIndices?: Record<string, LayerOperationValue>;
   } = $props();
 
-  // --- State & Derived ---
+  // --- Derived ---
+
+  /** ベース画像のObject URL */
   let baseImageUrl = $derived(
     slide?.baseImageId ? (imageUrls[slide.baseImageId] ?? "") : "",
   );
 
+  /** 表示順序に従って解決されたオーバーレイレイヤー画像のObject URL配列 */
   let resolvedLayerUrls = $derived(
     (slide?.visibleLayers ?? [])
       .map((slotKey) => {
@@ -44,28 +49,28 @@
   {#if baseImageUrl}
     <img src={baseImageUrl} alt="LCD Base" class="lcd-layer" />
   {/if}
-  {#each resolvedLayerUrls as url}
+  {#each resolvedLayerUrls as url, idx (`${idx}-${url}`)}
     <img src={url} alt="LCD Overlay" class="lcd-layer" />
   {/each}
 </div>
 
 <style>
   .lcd-container {
-    position: relative;
-    width: 100%;
     aspect-ratio: 16 / 9;
-    background-color: #000000;
+    background-color: #000;
     overflow: hidden;
+    position: relative;
     user-select: none;
+    width: 100%;
   }
 
   .lcd-layer {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
     height: 100%;
+    left: 0;
     object-fit: contain;
     pointer-events: none;
+    position: absolute;
+    top: 0;
+    width: 100%;
   }
 </style>
