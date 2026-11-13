@@ -1,19 +1,27 @@
 {
   "name": "machirun",
+  "appTitle": "Machirun",
   "private": true,
   "version": "0.2.3",
   "type": "module",
   "description": "町林市バスアプリ",
   "author": {
     "name": "ANKRED",
-    "url": "https://ank.red"
+    "url": "https://ank.red",
+    "social": {
+      "x": "https://x.com/_ankred",
+      "misskey": "https://misskey.io/@Ankred"
+    }
   },
-  "homepage": "",
-  "packageManager": "bun@1.4.4",
+  "homepage": "https://machirun.ank.red",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Ank-red/Machirun"
+    "url": "git+https://github.com/Ank-red/Machirun.git"
   },
+  "bugs": {
+    "url": "https://github.com/Ank-red/Machirun/issues"
+  },
+  "license": "GPL-3.0-only",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
