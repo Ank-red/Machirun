@@ -68,13 +68,13 @@ export default defineConfig(() => {
 
   return {
     define: {
-      __APP_TITLE__: JSON.stringify(define.APP_TITLE),
-      __APP_VERSION__: JSON.stringify(define.APP_VERSION),
-      __APP_HOMEPAGE__: JSON.stringify(define.APP_HOMEPAGE),
-      __APP_DESCRIPTION__: JSON.stringify(define.APP_DESCRIPTION),
-      __APP_AUTHOR_NAME__: JSON.stringify(define.APP_AUTHOR_NAME),
-      __APP_AUTHOR_URL__: JSON.stringify(define.APP_AUTHOR_URL),
-      __APP_REPOSITORY_URL__: JSON.stringify(define.APP_REPOSITORY_URL),
+      __APP_TITLE__: define.APP_TITLE,
+      __APP_VERSION__: define.APP_VERSION,
+      __APP_HOMEPAGE__: define.APP_HOMEPAGE,
+      __APP_DESCRIPTION__: define.APP_DESCRIPTION,
+      __APP_AUTHOR_NAME__: define.APP_AUTHOR_NAME,
+      __APP_AUTHOR_URL__: define.APP_AUTHOR_URL,
+      __APP_REPOSITORY_URL__: define.APP_REPOSITORY_URL,
       __APP_CHANGELOG__: JSON.stringify(changelog),
     },
     optimizeDeps: {
