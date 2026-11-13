@@ -4,6 +4,16 @@
   "version": "0.2.3",
   "type": "module",
   "description": "町林市バスアプリ",
+  "author": {
+    "name": "ANKRED",
+    "url": "https://ank.red"
+  },
+  "homepage": "",
+  "packageManager": "bun@1.4.4",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ank-red/Machirun"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -13,6 +23,13 @@
     "release:patch": "bun run release.ts patch",
     "release:minor": "bun run release.ts minor",
     "release:major": "bun run release.ts major"
+  },
+  "dependencies": {
+    "@jsquash/avif": "^2.1.1",
+    "beercss": "^5.0.3",
+    "fflate": "^0.8.3",
+    "material-dynamic-colors": "^1.2.0",
+    "wasm-media-encoders": "^0.7.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
@@ -27,12 +44,5 @@
     "typescript": "~7.0.2",
     "vite": "^8.3.6",
     "wrangler": "^4.158.0"
-  },
-  "dependencies": {
-    "@jsquash/avif": "^2.1.1",
-    "beercss": "^5.0.3",
-    "fflate": "^0.8.3",
-    "material-dynamic-colors": "^1.2.0",
-    "wasm-media-encoders": "^0.7.0"
   }
 }

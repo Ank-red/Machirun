@@ -46,7 +46,7 @@ async function runRelease() {
   await Bun.write(cargoPath, updatedCargo);
 
   // 5. Git コミット・タグ付与・プッシュ
-  const tagName = `app-v${newVersion}`;
+  const tagName = `v${newVersion}`;
   await Bun.sleep(1000);
   await $`git add package.json ${tauriConfPath} ${cargoPath} ${cargoPath.replace("toml", "lock")}`;
   await $`git commit -m ${newVersion}`;
