@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Machirun Driver",
   "mainBinaryName": "machirun",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "city.machibayashi.machirun",
   "build": {
     "frontendDist": "../dist",
