@@ -45,12 +45,13 @@ async function runRelease() {
 
   await Bun.write(cargoPath, updatedCargo);
 
+  await $`cargo update -p app --manifest-path ${cargoPath}`;
+
   // 5. Git コミット・タグ付与・プッシュ
   const tagName = `app-v${newVersion}`;
-  await Bun.sleep(1000);
   await $`git add package.json ${tauriConfPath} ${cargoPath} ${cargoPath.replace("toml", "lock")}`;
   await $`git commit -m ${newVersion}`;
-  await $`git tag -a ${tagName}`;
+  await $`git tag ${tagName}`;
   await $`git push origin HEAD`;
   await $`git push origin ${tagName}`;
 
