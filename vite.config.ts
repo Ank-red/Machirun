@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import packageJson from "./package.json" with { type: "json" };
 import { resolve } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 export interface CommitEntry {
   hash: string;
@@ -13,8 +13,16 @@ export interface CommitEntry {
 
 function getGitChangelog(): CommitEntry[] {
   try {
-    const raw = execSync(
-      'git log --no-merges -n 100 --date=short --pretty=format:"%h|%ad|%s|%D"',
+    const raw = execFileSync(
+      "git",
+      [
+        "log",
+        "--no-merges",
+        "-n",
+        "100",
+        "--date=short",
+        "--pretty=format:%h|%ad|%s|%D",
+      ],
       { encoding: "utf-8" },
     );
     return raw
