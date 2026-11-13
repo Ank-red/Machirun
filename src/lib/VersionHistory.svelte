@@ -125,11 +125,18 @@
           date: c.date,
           commits: [],
         };
-        if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(c.subject.trim())) {
+        const isVersionOnly = /^[0-9]+\.[0-9]+\.[0-9]+$/.test(c.subject.trim());
+        const isDevCommit = /^dev(?:\([^)]+\))?\s*[:：]/i.test(
+          c.subject.trim(),
+        );
+        if (!isVersionOnly && !isDevCommit) {
           current.commits.push(c);
         }
       } else {
-        current.commits.push(c);
+        const isTempCommit = /^temp$/i.test(c.subject.trim());
+        if (!isTempCommit) {
+          current.commits.push(c);
+        }
       }
     }
 

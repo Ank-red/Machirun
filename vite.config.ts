@@ -14,7 +14,7 @@ export interface CommitEntry {
 function getGitChangelog(): CommitEntry[] {
   try {
     const raw = execSync(
-      'git log -n 100 --date=short --pretty=format:"%h|%ad|%s|%D"',
+      'git log --no-merges -n 100 --date=short --pretty=format:"%h|%ad|%s|%D"',
       { encoding: "utf-8" },
     );
     return raw
@@ -33,9 +33,9 @@ function getGitChangelog(): CommitEntry[] {
         };
       })
       .filter((entry) => {
-        // "Merge" から始まるコミットメッセージやマージログを完全に排除する
-        const sub = entry.subject.toLowerCase();
-        if (sub.startsWith("merge") || sub.startsWith("Dev:") || sub.includes("merge branch") || sub.includes("merge pull request") || sub.includes("temp")) {
+        const isDevCommit = /^dev(?:\([^)]+\))?\s*[:：]/i.test(entry.subject.trim());
+        // タグが付いていない Dev: コミットはここで完全に除外
+        if (isDevCommit && !entry.versionTag) {
           return false;
         }
         return true;
