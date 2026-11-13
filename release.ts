@@ -1,4 +1,5 @@
 import { $ } from "bun";
+import { log } from "node:console";
 
 type BumpType = "major" | "minor" | "patch";
 
@@ -41,10 +42,12 @@ async function runRelease() {
     /^(version\s*=\s*)"[^"]+"/m,
     `$1"${newVersion}"`,
   );
+
   await Bun.write(cargoPath, updatedCargo);
 
   // 5. Git コミット・タグ付与・プッシュ
   const tagName = `app-v${newVersion}`;
+  await Bun.sleep(1000);
   await $`git add package.json ${tauriConfPath} ${cargoPath} ${cargoPath.replace("toml", "lock")}`;
   await $`git commit -m ${newVersion}`;
   await $`git tag ${tagName}`;
