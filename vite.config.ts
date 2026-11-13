@@ -57,24 +57,24 @@ export default defineConfig(() => {
   const changelog = getGitChangelog();
 
   const define: Record<string, string> = {
-    APP_TITLE: JSON.stringify(packageJson.appTitle || "UnknownAppName"),
-    APP_VERSION: JSON.stringify(packageJson.version || "UnknownVersion"),
-    APP_HOMEPAGE: JSON.stringify(packageJson.homepage || ""),
-    APP_DESCRIPTION: JSON.stringify(packageJson.description || ""),
-    APP_AUTHOR_NAME: JSON.stringify(packageJson.author?.name || "UnknownAuthor"),
-    APP_AUTHOR_URL: JSON.stringify(packageJson.author?.url || "UnknownAuthor"),
-    APP_REPOSITORY_URL: JSON.stringify(packageJson.repository?.url || ""),
+    APP_TITLE: packageJson.appTitle || "UnknownAppName",
+    APP_VERSION: packageJson.version || "UnknownVersion",
+    APP_HOMEPAGE: packageJson.homepage || "",
+    APP_DESCRIPTION: packageJson.description || "",
+    APP_AUTHOR_NAME: packageJson.author?.name || "UnknownAuthor",
+    APP_AUTHOR_URL: packageJson.author?.url || "UnknownAuthor",
+    APP_REPOSITORY_URL: packageJson.repository?.url || "",
   };
 
   return {
     define: {
-      __APP_TITLE__: define.APP_TITLE,
-      __APP_VERSION__: define.APP_VERSION,
-      __APP_HOMEPAGE__: define.APP_HOMEPAGE,
-      __APP_DESCRIPTION__: define.APP_DESCRIPTION,
-      __APP_AUTHOR_NAME__: define.APP_AUTHOR_NAME,
-      __APP_AUTHOR_URL__: define.APP_AUTHOR_URL,
-      __APP_REPOSITORY_URL__: define.APP_REPOSITORY_URL,
+      __APP_TITLE__: JSON.stringify(define.APP_TITLE),
+      __APP_VERSION__: JSON.stringify(define.APP_VERSION),
+      __APP_HOMEPAGE__: JSON.stringify(define.APP_HOMEPAGE),
+      __APP_DESCRIPTION__: JSON.stringify(define.APP_DESCRIPTION),
+      __APP_AUTHOR_NAME__: JSON.stringify(define.APP_AUTHOR_NAME),
+      __APP_AUTHOR_URL__: JSON.stringify(define.APP_AUTHOR_URL),
+      __APP_REPOSITORY_URL__: JSON.stringify(define.APP_REPOSITORY_URL),
       __APP_CHANGELOG__: JSON.stringify(changelog),
     },
     optimizeDeps: {
