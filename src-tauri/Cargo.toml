@@ -1,10 +1,10 @@
 [package]
 name = "app"
-version = "0.2.3"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.3.0"
+description = "町林市バスアプリ"
+authors = ["ANKRED"]
 license = ""
-repository = ""
+repository = "git+https://github.com/Ank-red/Machirun.git"
 edition = "2024"
 rust-version = "1.90"
 

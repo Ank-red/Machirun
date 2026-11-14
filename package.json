@@ -2,7 +2,7 @@
   "name": "machirun",
   "appTitle": "Machirun",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
   "description": "町林市バスアプリ",
   "author": {
@@ -79,7 +79,9 @@
     },
     "overrides": [
       {
-        "include": [ "*.svelte" ],
+        "include": [
+          "*.svelte"
+        ],
         "linter": {
           "rules": {
             "style": {
