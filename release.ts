@@ -66,6 +66,7 @@ async function runRelease() {
   await $`git tag ${tagName}`;
   await $`git push origin HEAD`;
   await $`git push origin ${tagName}`;
+  await $`bun run context`;
 
   console.log(`✅ リリース完了: v${newVersion} の更新とプッシュが完了しました！`);
 }
