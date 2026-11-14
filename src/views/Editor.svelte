@@ -25,6 +25,10 @@
     audioBlobs = $bindable<Record<string, Uint8Array>>({}),
     audioUrls = $bindable<Record<string, string>>({}),
     isMuted = false,
+    isDirty = false,
+    onsave,
+    onsaveas,
+    onimport,
   }: {
     preset?: RoutePreset;
     timetableCsv?: string;
@@ -33,6 +37,10 @@
     audioBlobs?: Record<string, Uint8Array>;
     audioUrls?: Record<string, string>;
     isMuted?: boolean;
+    isDirty?: boolean;
+    onsave?: () => void;
+    onsaveas?: () => void;
+    onimport?: () => void;
   } = $props();
 
   // --- Services & Editor UI State ---
@@ -531,16 +539,42 @@
 
   <!-- 上部バー：タイトルとアーカイブ入出力 -->
   <nav class="top-nav">
-    <h5 class="max">停留所エディタ</h5>
-    <FileButton
-      label="読み込み"
-      icon="folder_open"
-      accept=".mchrn,.zip"
-      onselect={handleImport}
-    />
-    <button type="button" class="primary" onclick={handleExport}>
+    <h5 class="max">
+      停留所エディタ
+      {#if isDirty}
+        <span class="chip small amber-text border">* 未保存</span>
+      {/if}
+    </h5>
+    {#if onimport}
+      <button type="button" class="border" onclick={onimport}>
+        <i>folder_open</i>
+        <span>読み込み</span>
+      </button>
+    {:else}
+      <FileButton
+        label="読み込み"
+        icon="folder_open"
+        accept=".mchrn,.zip"
+        onselect={handleImport}
+      />
+    {/if}
+    <button
+      type="button"
+      class="border"
+      onclick={() => (onsaveas ? onsaveas() : handleExport())}
+      title="Ctrl + Shift + S"
+    >
+      <i>save_as</i>
+      <span>名前をつけて保存</span>
+    </button>
+    <button
+      type="button"
+      class="primary"
+      onclick={() => (onsave ? onsave() : handleExport())}
+      title="Ctrl + S"
+    >
       <i>save</i>
-      <span>保存 (.mchrn)</span>
+      <span>上書き保存</span>
     </button>
   </nav>
 

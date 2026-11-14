@@ -1,21 +1,21 @@
 <script lang="ts">
   // --- Imports ---
 
-  import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
-  import Dropdown from "./components/Dropdown.svelte";
-  import FileButton from "./components/FileButton.svelte";
-  import Header from "./components/Header.svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import DownloadView from "./views/Download.svelte";
+  import DriverView from "./views/Driver.svelte";
+  import EditorView from "./views/Editor.svelte";
+  import InfoView from "./views/Info.svelte";
   import { ArchiveService } from "./core/archive";
   import { AudioPlayerService } from "./core/audioPlayer";
   import { IS_TAURI, LcdSyncService } from "./core/lcdSync";
   import { PresetService } from "./core/preset";
   import { TimetableService } from "./core/timetable";
   import type { LayerOperationValue, LoadedPresetItem } from "./core/types";
-  import DownloadView from "./views/Download.svelte";
-  import DriverView from "./views/Driver.svelte";
-  import EditorView from "./views/Editor.svelte";
-  import InfoView from "./views/Info.svelte";
+  import Dropdown from "./components/Dropdown.svelte";
+  import FileButton from "./components/FileButton.svelte";
+  import Header from "./components/Header.svelte";
 
   // --- Constants & Services ---
 
@@ -45,6 +45,12 @@
 
   /** アクティブなプリセット構造 */
   let preset = $derived(activeItem?.preset ?? PresetService.createDefault());
+
+  /** プリセットファイルの読み込み中フラグ */
+  let isLoadingPresets = $state<boolean>(false);
+
+  /** 移動・削除により読み込めなかったファイルの通知メッセージ */
+  let missingFilesNotice = $state<string>("");
 
   /** アクティブなダイヤグラムCSV文字列 */
   let timetableCsv = $derived(activeItem?.timetableCsv ?? "");
@@ -117,7 +123,64 @@
   /** 現在表示中の停留所スケジュール */
   let currentStop = $derived(currentTrip?.stops[currentStopIdx] ?? null);
 
+  /** 現在アクティブなプリセットに未保存の変更があるかどうか */
+  let isDirty = $derived(
+    activeItem
+      ? ArchiveService.createSnapshot(
+          activeItem.preset,
+          activeItem.timetableCsv,
+        ) !== activeItem.savedSnapshot
+      : false,
+  );
+
   // --- Handlers & Methods ---
+
+  /**
+   * 通知スナックバーを一定時間表示する
+   * @param message 表示するメッセージ
+   */
+  function showNotice(message: string): void {
+    missingFilesNotice = message;
+    setTimeout(() => {
+      if (missingFilesNotice === message) {
+        missingFilesNotice = "";
+      }
+    }, 5000);
+  }
+
+  /**
+   * 新規の空プリセットを作成してアクティブにする
+   */
+  async function handleCreateNewPreset(): Promise<void> {
+    if (isDirty) {
+      const ok = await ArchiveService.confirmDiscardChanges(
+        "現在のプリセットに未保存の変更があります。新規プリセットを作成しますか？",
+      );
+      if (!ok) return;
+    }
+
+    const presetData = PresetService.createDefault();
+    const id = crypto.randomUUID().slice(0, 8);
+    const savedSnapshot = ArchiveService.createSnapshot(presetData, "");
+
+    const newItem: LoadedPresetItem = {
+      id,
+      fileName: "新規プリセット.mchrn",
+      filePath: undefined,
+      savedSnapshot,
+      preset: presetData,
+      timetableCsv: "",
+      imageBlobs: {},
+      imageUrls: {},
+      audioBlobs: {},
+      audioUrls: {},
+    };
+
+    loadedPresets = [...loadedPresets, newItem];
+    activePresetId = id;
+    currentView = "editor";
+    resetOperationState();
+  }
 
   /**
    * 車載器の運行状態を初期（運行準備中）へリセットする
@@ -133,7 +196,84 @@
   }
 
   /**
-   * 複数の `.mchrn` ファイルを読み込んでリストへ追加する
+   * Rustから受け取った生ファイル配列をプリセット一覧へ追加し、パス履歴を更新する
+   * @param rawFiles 読み込まれた生ファイルデータの配列
+   * @param replaceActive 現在のアクティブアイテムを置き換える場合はtrue
+   */
+  function registerRawFiles(
+    rawFiles: { path: string; fileName: string; data: number[] }[],
+    replaceActive: boolean = false,
+  ): void {
+    if (rawFiles.length === 0) return;
+
+    for (const raw of rawFiles) {
+      try {
+        const loaded = ArchiveService.importFromBytes(new Uint8Array(raw.data));
+        const savedSnapshot = ArchiveService.createSnapshot(
+          loaded.preset,
+          loaded.timetableCsv,
+        );
+
+        if (replaceActive && activeItem) {
+          activeItem.fileName = raw.fileName;
+          activeItem.filePath = raw.path;
+          activeItem.preset = loaded.preset;
+          activeItem.timetableCsv = loaded.timetableCsv;
+          activeItem.imageBlobs = loaded.imageBlobs;
+          activeItem.imageUrls = loaded.imageUrls;
+          activeItem.audioBlobs = loaded.audioBlobs;
+          activeItem.audioUrls = loaded.audioUrls;
+          activeItem.savedSnapshot = savedSnapshot;
+        } else {
+          const existingIdx = loadedPresets.findIndex(
+            (p) => p.filePath && p.filePath === raw.path,
+          );
+          const id =
+            existingIdx >= 0
+              ? loadedPresets[existingIdx].id
+              : crypto.randomUUID().slice(0, 8);
+          const newItem: LoadedPresetItem = {
+            id,
+            fileName: raw.fileName,
+            filePath: raw.path,
+            savedSnapshot,
+            ...loaded,
+          };
+
+          if (existingIdx >= 0) {
+            loadedPresets[existingIdx] = newItem;
+          } else {
+            loadedPresets = [...loadedPresets, newItem];
+          }
+          if (!activePresetId) activePresetId = id;
+        }
+      } catch (err) {
+        console.error(`プリセット読込失敗 (${raw.fileName}):`, err);
+      }
+    }
+
+    ArchiveService.saveRecentPaths(loadedPresets.map((p) => p.filePath));
+    resetOperationState();
+  }
+
+  async function handleOpenNativeFiles(
+    replaceActive: boolean = false,
+  ): Promise<void> {
+    if (replaceActive && isDirty) {
+      const ok = await ArchiveService.confirmDiscardChanges();
+      if (!ok) return;
+    }
+    isLoadingPresets = true;
+    try {
+      const rawFiles = await ArchiveService.openFilesNative();
+      registerRawFiles(rawFiles, replaceActive);
+    } finally {
+      isLoadingPresets = false;
+    }
+  }
+
+  /**
+   * ブラウザのFileListから `.mchrn` を追加読み込みする（Webフォールバック用）
    * @param files 選択されたFileList
    */
   async function handleLoadPresetFiles(files: FileList): Promise<void> {
@@ -141,17 +281,88 @@
       try {
         const loaded = await ArchiveService.importMchrn(file);
         const id = crypto.randomUUID().slice(0, 8);
+        const savedSnapshot = ArchiveService.createSnapshot(
+          loaded.preset,
+          loaded.timetableCsv,
+        );
         loadedPresets = [
           ...loadedPresets,
-          { id, fileName: file.name, ...loaded },
+          { id, fileName: file.name, savedSnapshot, ...loaded },
         ];
-        if (!activePresetId) {
-          activePresetId = id;
-        }
+        if (!activePresetId) activePresetId = id;
       } catch (err) {
         console.error(`プリセット読込失敗 (${file.name}):`, err);
       }
     }
+    resetOperationState();
+  }
+
+  /**
+   * 現在アクティブなプリセットを保存する
+   * @param forceSaveAs trueの場合は既存パスがあっても「名前をつけて保存」ダイアログを開く
+   */
+  async function handleSaveActivePreset(
+    forceSaveAs: boolean = false,
+  ): Promise<void> {
+    if (!activeItem) return;
+
+    const targetPath = forceSaveAs ? undefined : activeItem.filePath;
+    const savedPath = await ArchiveService.saveMchrn(
+      {
+        preset: activeItem.preset,
+        timetableCsv: activeItem.timetableCsv,
+        imageBlobs: activeItem.imageBlobs,
+        audioBlobs: activeItem.audioBlobs,
+      },
+      targetPath,
+    );
+
+    if (savedPath) {
+      activeItem.filePath = savedPath;
+      activeItem.fileName =
+        savedPath.split(/[/\\]/).pop() ?? activeItem.fileName;
+      activeItem.savedSnapshot = ArchiveService.createSnapshot(
+        activeItem.preset,
+        activeItem.timetableCsv,
+      );
+      ArchiveService.saveRecentPaths(loadedPresets.map((p) => p.filePath));
+    }
+  }
+
+  /**
+   * 画面ビュー切り替え時に未保存の変更があれば確認を行う
+   * @param nextView 切り替え先のビュー
+   */
+  async function handleViewChange(
+    nextView: "driver" | "editor" | "info",
+  ): Promise<void> {
+    if (currentView === "editor" && nextView !== "editor" && isDirty) {
+      const ok = await ArchiveService.confirmDiscardChanges(
+        "編集中のプリセットに保存されていない変更があります。このまま別画面へ切り替えますか？",
+      );
+      if (!ok) {
+        currentView = "editor";
+        return;
+      }
+    }
+    currentView = nextView;
+  }
+
+  /**
+   * アクティブプリセット切り替え時に未保存の変更があれば確認を行う
+   * @param nextId 切り替え先のプリセットID
+   */
+  async function handlePresetChange(nextId: string): Promise<void> {
+    if (isDirty && activeItem && nextId !== activeItem.id) {
+      const ok = await ArchiveService.confirmDiscardChanges(
+        "現在のプリセットに保存されていない変更があります。別のプリセットへ切り替えますか？",
+      );
+      if (!ok) {
+        activePresetId = activeItem.id;
+        return;
+      }
+    }
+    activePresetId = nextId;
     resetOperationState();
   }
 
@@ -300,25 +511,69 @@
     });
   });
 
+  /** 未保存変更状態（isDirty）をRust側のウィンドウ終了ガードへ同期 */
+  $effect(() => {
+    ArchiveService.syncUnsavedState(isDirty);
+  });
+
   onMount(() => {
-    if (!IS_TAURI) return;
+    // Ctrl + S / Ctrl + Shift + S ショートカット監視
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (activeItem) {
+          handleSaveActivePreset(e.shiftKey);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    if (!IS_TAURI) {
+      return () => window.removeEventListener("keydown", handleKeyDown);
+    }
+
+    // 前回読み込んだ .mchrn パス一覧の自動復元
+    const recentPaths = ArchiveService.loadRecentPaths();
+    if (recentPaths.length > 0) {
+      isLoadingPresets = true;
+      ArchiveService.readFilesByPaths(recentPaths)
+        .then(({ loaded, missing }) => {
+          registerRawFiles(loaded, false);
+          if (missing.length > 0) {
+            const names = missing
+              .map((p) => p.split(/[/\\]/).pop() ?? p)
+              .join(", ");
+            showNotice(
+              `移動または削除されたファイルをスキップしました: ${names}`,
+            );
+            // 読み込めた有効なパスだけで localStorage を更新
+            ArchiveService.saveRecentPaths(
+              loadedPresets.map((p) => p.filePath),
+            );
+          }
+        })
+        .finally(() => {
+          isLoadingPresets = false;
+        });
+    }
 
     const timer = setInterval(() => {
       now = new Date();
     }, 1000);
 
-    let unlisten: (() => void) | null = null;
+    let unlistenKey: (() => void) | null = null;
     listen<string>("global-key", (event) => {
       if (currentView !== "driver") return;
       if (event.payload === "ArrowRight") advanceStep();
       else if (event.payload === "ArrowLeft") retreatStep();
     }).then((fn) => {
-      unlisten = fn;
+      unlistenKey = fn;
     });
 
     return () => {
+      window.removeEventListener("keydown", handleKeyDown);
       clearInterval(timer);
-      unlisten?.();
+      unlistenKey?.();
     };
   });
 </script>
@@ -328,7 +583,8 @@
 {:else}
   <Header title="Machirun">
     <Dropdown
-      bind:value={currentView}
+      value={currentView}
+      onchange={handleViewChange}
       options={[
         { value: "driver", label: "車載器" },
         { value: "editor", label: "停留所エディタ" },
@@ -349,12 +605,12 @@
     {/if}
     {#if loadedPresets.length > 0}
       <Dropdown
-        bind:value={activePresetId}
+        value={activePresetId}
         options={loadedPresets.map((p) => ({
           value: p.id,
           label: p.fileName,
         }))}
-        onchange={resetOperationState}
+        onchange={handlePresetChange}
       />
     {/if}
     <button
@@ -365,18 +621,30 @@
     >
       <i>{isMuted ? "volume_off" : "volume_up"}</i>
     </button>
-    <FileButton
-      label="mchrn追加読込"
-      icon="folder_open"
-      accept=".mchrn,.zip"
-      multiple={true}
-      onselect={handleLoadPresetFiles}
-    />
+    {#if IS_TAURI}
+      <button
+        type="button"
+        class="border"
+        onclick={() => handleOpenNativeFiles(false)}
+      >
+        <i>folder_open</i>
+        <span>mchrn追加読込</span>
+      </button>
+    {:else}
+      <FileButton
+        label="mchrn追加読込"
+        icon="folder_open"
+        accept=".mchrn,.zip"
+        multiple={true}
+        onselect={handleLoadPresetFiles}
+      />
+    {/if}
   </Header>
 
   <main class="responsive padding">
     {#if currentView === "driver"}
       <DriverView
+        isLoading={isLoadingPresets}
         hasLoadedPresets={loadedPresets.length > 0}
         {currentTrip}
         {currentStop}
@@ -387,25 +655,53 @@
         onadvance={advanceStep}
         onretreat={retreatStep}
       />
-    {:else if currentView === "editor" && activeItem}
-      <EditorView
-        bind:preset={activeItem.preset}
-        bind:timetableCsv={activeItem.timetableCsv}
-        bind:imageBlobs={activeItem.imageBlobs}
-        bind:imageUrls={activeItem.imageUrls}
-        bind:audioBlobs={activeItem.audioBlobs}
-        bind:audioUrls={activeItem.audioUrls}
-        {isMuted}
-      />
+    {:else if currentView === "editor"}
+      {#if isLoadingPresets}
+        <article class="border round large-padding center-align">
+          <progress class="circle large"></progress>
+          <h6 class="top-margin">プリセットファイルを読み込み中...</h6>
+        </article>
+      {:else if activeItem}
+        <EditorView
+          bind:preset={activeItem.preset}
+          bind:timetableCsv={activeItem.timetableCsv}
+          bind:imageBlobs={activeItem.imageBlobs}
+          bind:imageUrls={activeItem.imageUrls}
+          bind:audioBlobs={activeItem.audioBlobs}
+          bind:audioUrls={activeItem.audioUrls}
+          {isMuted}
+          {isDirty}
+          onsave={() => handleSaveActivePreset(false)}
+          onsaveas={() => handleSaveActivePreset(true)}
+          onimport={IS_TAURI ? () => handleOpenNativeFiles(true) : undefined}
+        />
+      {:else}
+        <article class="border round large-padding center-align">
+          <p>
+            編集する mchrn
+            プリセットが読み込まれていません。「mchrn追加読込」からファイルを追加するか、新規作成してください。
+          </p>
+          <nav class="center-align">
+            <button
+              type="button"
+              class="primary"
+              onclick={handleCreateNewPreset}
+            >
+              <i>add</i>
+              <span>新規プリセットを作成</span>
+            </button>
+          </nav>
+        </article>
+      {/if}
     {:else if currentView === "info"}
       <InfoView />
-    {:else}
-      <article class="border padding center-align">
-        <p>
-          編集する mchrn
-          プリセットが読み込まれていません。「mchrn追加読込」からファイルを追加してください。
-        </p>
-      </article>
+    {/if}
+
+    {#if missingFilesNotice}
+      <div class="snackbar active">
+        <i>info</i>
+        <div class="max">{missingFilesNotice}</div>
+      </div>
     {/if}
   </main>
 {/if}

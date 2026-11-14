@@ -7,8 +7,16 @@ import type {
   ConvertedAssetResult,
   ImageAsset,
   LoadedArchive,
+  RawFilePayload,
   RoutePreset,
+  StartupLoadPayload,
 } from "./types";
+
+/** localStorage に保持する読み込み済みファイルパス一覧のキー */
+const RECENT_PATHS_STORAGE_KEY = "machirun_recent_mchrn_paths";
+
+/** localStorage に保持する最後に使用したディレクトリパスのキー */
+const LAST_DIR_STORAGE_KEY = "machirun_last_directory";
 
 /**
  * アセットのAVIF/Opus変換および `.mchrn` アーカイブの入出力を担うサービスクラス
@@ -153,16 +161,126 @@ export class ArchiveService {
   }
 
   /**
-   * プリセットデータ一式を `.mchrn` として圧縮し、ネイティブダイアログ（Web時はダウンロード）で保存する
+     * 未保存変更（Dirty状態）を検知するための状態スナップショット文字列を生成する
+     * @param preset 対象のプリセット
+     * @param timetableCsv ダイヤグラムCSV文字列
+     * @returns 比較用のJSON文字列
+     */
+  static createSnapshot(preset: RoutePreset, timetableCsv: string): string {
+    return JSON.stringify({ preset, timetableCsv });
+  }
+
+  /**
+   * 未保存変更の有無をRust側（ウィンドウ終了ガード用）へ同期する
+   * @param dirty 未保存の変更がある場合はtrue
+   */
+  static async syncUnsavedState(dirty: boolean): Promise<void> {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    try {
+      await invoke("set_unsaved_changes", { dirty });
+    } catch (err) {
+      console.error("Failed to sync unsaved state:", err);
+    }
+  }
+
+  /**
+   * 読み込み済みファイルのフルパス一覧を localStorage へ保存する
+   * @param paths ファイルパスの配列
+   */
+  static saveRecentPaths(paths: (string | undefined)[]): void {
+    const validPaths = Array.from(
+      new Set(paths.filter((p): p is string => Boolean(p))),
+    );
+    localStorage.setItem(RECENT_PATHS_STORAGE_KEY, JSON.stringify(validPaths));
+  }
+
+  /**
+   * localStorage から前回保存されたファイルパス一覧を取得する
+   * @returns ファイルパスの配列
+   */
+  static loadRecentPaths(): string[] {
+    try {
+      const raw = localStorage.getItem(RECENT_PATHS_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 未保存の変更がある場合に確認ダイアログを表示する
+   * @param message 確認メッセージ
+   * @returns 破棄して続行する場合はtrue
+   */
+  static async confirmDiscardChanges(
+    message: string = "保存されていない変更があります。破棄して移動しますか？",
+  ): Promise<boolean> {
+    if ("__TAURI_INTERNALS__" in window) {
+      return invoke<boolean>("confirm_unsaved_dialog", { message });
+    }
+    return window.confirm(message);
+  }
+
+  /**
+   * ファイルのフルパスから親ディレクトリパスを抽出して localStorage に記憶する（Windows / Linux 両対応）
+   * @param filePath ファイルのフルパス
+   */
+  static rememberDirectoryFromFile(filePath?: string): void {
+    if (!filePath) return;
+    const lastSepIdx = Math.max(
+      filePath.lastIndexOf("/"),
+      filePath.lastIndexOf("\\"),
+    );
+    if (lastSepIdx > 0) {
+      const dir = filePath.slice(0, lastSepIdx);
+      localStorage.setItem(LAST_DIR_STORAGE_KEY, dir);
+    }
+  }
+
+  /**
+   * 前回記憶したディレクトリパスを取得する
+   * @returns ディレクトリパス（未記憶時は undefined）
+   */
+  static getLastDirectory(): string | undefined {
+    return localStorage.getItem(LAST_DIR_STORAGE_KEY) ?? undefined;
+  }
+
+  /**
+   * ネイティブダイアログを開いて `.mchrn` ファイルを読み込む（Tauri専用）
+   * @returns 読み込まれた生ファイルデータの配列
+   */
+  static async openFilesNative(): Promise<RawFilePayload[]> {
+    if (!("__TAURI_INTERNALS__" in window)) return [];
+    const defaultDir = this.getLastDirectory();
+    return invoke<RawFilePayload[]>("open_mchrn_files_dialog", { defaultDir });
+  }
+
+  /**
+    * 指定されたパス配列から `.mchrn` ファイルを読み込む（起動時の自動復元用）
+    * @param paths ファイルパスの配列
+    * @returns 読み込めたファイル配列と、移動・削除されたパス配列
+    */
+  static async readFilesByPaths(paths: string[]): Promise<StartupLoadPayload> {
+    if (!("__TAURI_INTERNALS__" in window) || paths.length === 0) {
+      return { loaded: [], missing: [] };
+    }
+    return invoke<StartupLoadPayload>("read_mchrn_files_by_paths", { paths });
+  }
+
+  /**
+   * プリセットデータ一式を `.mchrn` として圧縮し、上書き保存または名前をつけて保存する
+   * （上書き保存時に元フォルダが移動・削除されていた場合は保存ダイアログへ自動フォールバック）
    * @param data 保存対象のプリセット・CSV・画像/音声バイナリ
-   * @returns 保存成功時はtrue、キャンセルまたは失敗時はfalse
+   * @param targetPath 上書き保存先のフルパス（省略時は「名前をつけて保存」ダイアログを表示）
+   * @returns 保存されたファイルパス（Web時はファイル名）、キャンセル・失敗時は null
    */
   static async saveMchrn(
     data: Pick<
       LoadedArchive,
       "preset" | "timetableCsv" | "imageBlobs" | "audioBlobs"
     >,
-  ): Promise<boolean> {
+    targetPath?: string,
+  ): Promise<string | null> {
     const files: Zippable = {
       "preset.json": [
         strToU8(JSON.stringify(data.preset, null, 2)),
@@ -182,15 +300,35 @@ export class ArchiveService {
     const defaultName = `${data.preset.meta.name || "preset"}.mchrn`;
 
     if ("__TAURI_INTERNALS__" in window) {
+      const byteArray = Array.from(zippedBytes);
+
+      if (targetPath) {
+        try {
+          const saved = await invoke<string>("write_mchrn_file_direct", {
+            path: targetPath,
+            data: byteArray,
+          });
+          this.rememberDirectoryFromFile(saved);
+          return saved;
+        } catch (err) {
+          console.warn(
+            "Direct write failed, falling back to Save As dialog:",
+            err,
+          );
+        }
+      }
+
       try {
-        await invoke<string>("save_mchrn_file", {
+        const saved = await invoke<string>("save_mchrn_file", {
           defaultName,
-          data: Array.from(zippedBytes),
+          defaultDir: this.getLastDirectory(),
+          data: byteArray,
         });
-        return true;
+        this.rememberDirectoryFromFile(saved);
+        return saved;
       } catch (err) {
         if (err !== "Cancelled") console.error("Save failed:", err);
-        return false;
+        return null;
       }
     }
 
@@ -202,16 +340,15 @@ export class ArchiveService {
     anchor.download = defaultName;
     anchor.click();
     URL.revokeObjectURL(url);
-    return true;
+    return defaultName;
   }
 
   /**
-   * アーカイブファイル（.mchrn / .zip）を読み込み、メモリ上のデータ構造へ展開する
-   * @param file 読み込むアーカイブファイル
+   * バイト配列（Uint8Array）からアーカイブを展開する
+   * @param buffer ZIP/mchrn のバイナリ配列
    * @returns 展開されたプリセット・CSV・バイナリ・Object URL一式
    */
-  static async importMchrn(file: File): Promise<LoadedArchive> {
-    const buffer = new Uint8Array(await file.arrayBuffer());
+  static importFromBytes(buffer: Uint8Array): LoadedArchive {
     const unzipped = unzipSync(buffer);
 
     const presetJson = unzipped["preset.json"]
@@ -256,5 +393,15 @@ export class ArchiveService {
       audioBlobs,
       audioUrls,
     };
+  }
+
+  /**
+   * ブラウザの File オブジェクトからアーカイブを展開する
+   * @param file 読み込むアーカイブファイル
+   * @returns 展開されたプリセット・CSV・バイナリ・Object URL一式
+   */
+  static async importMchrn(file: File): Promise<LoadedArchive> {
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    return this.importFromBytes(buffer);
   }
 }

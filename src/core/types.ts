@@ -139,10 +139,27 @@ export interface LoadedArchive {
   audioUrls: Record<string, string>;
 }
 
+/** Rust側から返却されるネイティブファイル読込結果 */
+export interface RawFilePayload {
+  path: string;
+  fileName: string;
+  data: number[];
+}
+
+/** 起動時のパス一括読み込み結果ペイロード */
+export interface StartupLoadPayload {
+  loaded: RawFilePayload[];
+  missing: string[];
+}
+
 /** 車載器・エディタで管理する読み込み済みプリセット単位のアイテム */
 export interface LoadedPresetItem extends LoadedArchive {
   id: string;
   fileName: string;
+  /** ローカルディスク上のフルパス（Web環境や新規未保存時はundefined） */
+  filePath?: string;
+  /** 最終保存・読込時点の変更検知用スナップショット文字列 */
+  savedSnapshot: string;
 }
 
 /** アセット変換結果の共通構造 */

@@ -4,10 +4,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tiny_http::{Header, Response, Server};
 
 /// OBSブラウザソースへ配信するクライアントHTMLテンプレート
@@ -173,19 +174,154 @@ fn register_audio_blobs(blobs: HashMap<String, Vec<u8>>) {
 }
 
 /// ネイティブのファイル保存ダイアログを開き、`.mchrn` バイナリを書き出すTauriコマンド
+/// （前回ディレクトリまたは OS 標準のドキュメントフォルダを初期表示する）
 #[tauri::command]
-fn save_mchrn_file(default_name: String, data: Vec<u8>) -> Result<String, String> {
-    let file = rfd::FileDialog::new()
+async fn save_mchrn_file(
+    app: AppHandle,
+    default_name: String,
+    default_dir: Option<String>,
+    data: Vec<u8>,
+) -> Result<String, String> {
+    let mut dialog = rfd::FileDialog::new()
         .set_file_name(&default_name)
-        .add_filter("Machirun Preset", &["mchrn"])
-        .save_file();
+        .add_filter("Machirun Preset", &["mchrn"]);
 
-    match file {
+    let mut dir_set = false;
+    if let Some(dir) = default_dir.filter(|d| !d.is_empty()) {
+        let dir_path = std::path::PathBuf::from(dir);
+        if dir_path.exists() {
+            dialog = dialog.set_directory(dir_path);
+            dir_set = true;
+        }
+    }
+    if !dir_set {
+        if let Ok(doc_dir) = app.path().document_dir() {
+            dialog = dialog.set_directory(doc_dir);
+        }
+    }
+
+    match dialog.save_file() {
         Some(path) => fs::write(&path, data)
             .map(|_| path.to_string_lossy().to_string())
             .map_err(|e| e.to_string()),
         None => Err("Cancelled".to_string()),
     }
+}
+
+/// 読み込んだファイルのパス・ファイル名・バイナリデータを返す構造体
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RawFileResult {
+    path: String,
+    file_name: String,
+    data: Vec<u8>,
+}
+
+/// 起動時のパス一括読み込み結果（成功したファイル群と、移動・削除されたパス群）
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupLoadResult {
+    loaded: Vec<RawFileResult>,
+    missing: Vec<String>,
+}
+
+/// 1つのファイルパスから RawFileResult を生成する内部ヘルパー
+fn read_raw_file(path: std::path::PathBuf) -> Result<RawFileResult, String> {
+    let file_name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let full_path = path.to_string_lossy().to_string();
+    let data = fs::read(&path).map_err(|e| format!("{}: {}", full_path, e))?;
+
+    Ok(RawFileResult {
+        path: full_path,
+        file_name,
+        data,
+    })
+}
+
+/// ネイティブダイアログで `.mchrn` ファイルを複数選択して読み込むTauriコマンド
+#[tauri::command]
+async fn open_mchrn_files_dialog(
+    app: AppHandle,
+    default_dir: Option<String>,
+) -> Result<Vec<RawFileResult>, String> {
+    let mut dialog = rfd::FileDialog::new().add_filter("Machirun Preset", &["mchrn", "zip"]);
+
+    if let Some(dir) = default_dir.filter(|d| !d.is_empty()) {
+        let dir_path = std::path::PathBuf::from(dir);
+        if dir_path.exists() {
+            dialog = dialog.set_directory(dir_path);
+        }
+    } else if let Ok(doc_dir) = app.path().document_dir() {
+        dialog = dialog.set_directory(doc_dir);
+    }
+
+    match dialog.pick_files() {
+        Some(paths) => {
+            let mut results = Vec::new();
+            for path in paths {
+                if let Ok(res) = read_raw_file(path) {
+                    results.push(res);
+                }
+            }
+            Ok(results)
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// 指定されたファイルパス配列から `.mchrn` ファイルを読み込むTauriコマンド（移動・削除されたパスも検出）
+#[tauri::command]
+async fn read_mchrn_files_by_paths(paths: Vec<String>) -> StartupLoadResult {
+    let mut loaded = Vec::new();
+    let mut missing = Vec::new();
+
+    for p in paths {
+        let path_buf = std::path::PathBuf::from(&p);
+        match read_raw_file(path_buf) {
+            Ok(res) => loaded.push(res),
+            Err(_) => missing.push(p),
+        }
+    }
+
+    StartupLoadResult { loaded, missing }
+}
+
+/// 指定されたファイルパスへ `.mchrn` バイナリを直接上書き保存するTauriコマンド
+/// （元ファイルが移動・削除されて親ディレクトリが存在しない場合はエラーを返す）
+#[tauri::command]
+async fn write_mchrn_file_direct(path: String, data: Vec<u8>) -> Result<String, String> {
+    let path_buf = std::path::PathBuf::from(&path);
+    if let Some(parent) = path_buf.parent() {
+        if !parent.exists() {
+            return Err("Parent directory does not exist".to_string());
+        }
+    }
+    fs::write(&path_buf, data)
+        .map(|_| path)
+        .map_err(|e| e.to_string())
+}
+
+/// 未保存の変更が存在するかどうかのフラグ（ウィンドウ終了時の警告判定用）
+static HAS_UNSAVED_CHANGES: AtomicBool = AtomicBool::new(false);
+/// フロントエンドの未保存変更状態（isDirty）をRust側へ同期するTauriコマンド
+#[tauri::command]
+fn set_unsaved_changes(dirty: bool) {
+    HAS_UNSAVED_CHANGES.store(dirty, Ordering::SeqCst);
+}
+
+/// ネイティブのYes/No確認ダイアログを表示するTauriコマンド（別スレッド実行でUIロックを防止）
+#[tauri::command]
+async fn confirm_unsaved_dialog(message: String) -> bool {
+    rfd::MessageDialog::new()
+        .set_title("未保存の変更")
+        .set_description(&message)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes
 }
 
 /// CORSヘッダーとContent-Typeを付与したHTTPレスポンスを生成する
@@ -281,11 +417,34 @@ pub fn run() {
             spawn_global_key_listener(app.handle().clone());
             Ok(())
         })
+        .on_window_event(|_window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if HAS_UNSAVED_CHANGES.load(Ordering::SeqCst) {
+                    let should_close = rfd::MessageDialog::new()
+                        .set_title("未保存の変更")
+                        .set_description(
+                            "保存されていない変更があります。保存せずにアプリを終了しますか？",
+                        )
+                        .set_buttons(rfd::MessageButtons::YesNo)
+                        .show()
+                        == rfd::MessageDialogResult::Yes;
+
+                    if !should_close {
+                        api.prevent_close();
+                    }
+                }
+            }
+        })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             sync_lcd_to_rust,
             register_audio_blobs,
-            save_mchrn_file
+            save_mchrn_file,
+            open_mchrn_files_dialog,
+            read_mchrn_files_by_paths,
+            write_mchrn_file_direct,
+            confirm_unsaved_dialog,
+            set_unsaved_changes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

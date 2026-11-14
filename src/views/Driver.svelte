@@ -6,6 +6,7 @@
   // --- Props ---
 
   let {
+    isLoading = false,
     hasLoadedPresets,
     currentTrip,
     currentStop,
@@ -16,6 +17,7 @@
     onadvance,
     onretreat,
   }: {
+    isLoading?: boolean;
     hasLoadedPresets: boolean;
     currentTrip: BusTrip | null;
     currentStop: StopSchedule | null;
@@ -38,7 +40,12 @@
 
 <!-- 車載器メイン運行画面 -->
 <article class="border round center-align">
-  {#if !hasLoadedPresets}
+  {#if isLoading}
+    <div class="large-padding center-align">
+      <progress class="circle large"></progress>
+      <h6 class="top-margin">プリセットファイルを読み込み中...</h6>
+    </div>
+  {:else if !hasLoadedPresets}
     <div class="padding">
       <h5>.mchrn プリセットファイルが読み込まれていません</h5>
       <p class="small-text">
