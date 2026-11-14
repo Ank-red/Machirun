@@ -33,7 +33,7 @@ function getGitChangelog(): CommitEntry[] {
         const tagMatch = refs?.match(
           /tag:\s*(?:app-v|v)?([0-9]+\.[0-9]+\.[0-9]+)/,
         );
-        const isVersionCommit = /^[0-9]+\.[0-9]+\.[0-9]+\$/.test(subject.trim());
+        const isVersionCommit = /^[0-9]+\.[0-9]+\.[0-9]+$/.test(subject.trim());
 
         return {
           hash,

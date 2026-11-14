@@ -1,6 +1,5 @@
 #### `README/CODING_STANDARDS.md`
 
-```markdown
 # Machirun コーディング規約
 
 本プロジェクトにおけるコード品質・一貫性・保守性を維持するための規約を定める。
@@ -37,4 +36,3 @@
 
 - プロジェクトルートの設定ファイル乱立を防ぐため、`tsconfig.json` は単一ファイルに統合し、Biome (`biome`) および Stylelint (`stylelint`) のルール定義は `package.json` 内に統合する。
 - コミット前に `bun run check` および `bun run lint` がエラーなく通過することを必須とする。
-```
