@@ -37,11 +37,7 @@
   let activePresetId = $state<string>("");
 
   /** 現在アクティブなプリセットアイテム */
-  let activeItem = $derived(
-    loadedPresets.find((p) => p.id === activePresetId) ??
-      loadedPresets[0] ??
-      null,
-  );
+  let activeItem = $derived(loadedPresets.find((p) => p.id === activePresetId) ?? loadedPresets[0] ?? null);
 
   /** アクティブなプリセット構造 */
   let preset = $derived(activeItem?.preset ?? PresetService.createDefault());
@@ -126,10 +122,7 @@
   /** 現在アクティブなプリセットに未保存の変更があるかどうか */
   let isDirty = $derived(
     activeItem
-      ? ArchiveService.createSnapshot(
-          activeItem.preset,
-          activeItem.timetableCsv,
-        ) !== activeItem.savedSnapshot
+      ? ArchiveService.createSnapshot(activeItem.preset, activeItem.timetableCsv) !== activeItem.savedSnapshot
       : false,
   );
 
@@ -209,10 +202,7 @@
     for (const raw of rawFiles) {
       try {
         const loaded = ArchiveService.importFromBytes(new Uint8Array(raw.data));
-        const savedSnapshot = ArchiveService.createSnapshot(
-          loaded.preset,
-          loaded.timetableCsv,
-        );
+        const savedSnapshot = ArchiveService.createSnapshot(loaded.preset, loaded.timetableCsv);
 
         if (replaceActive && activeItem) {
           activeItem.fileName = raw.fileName;
@@ -225,13 +215,8 @@
           activeItem.audioUrls = loaded.audioUrls;
           activeItem.savedSnapshot = savedSnapshot;
         } else {
-          const existingIdx = loadedPresets.findIndex(
-            (p) => p.filePath && p.filePath === raw.path,
-          );
-          const id =
-            existingIdx >= 0
-              ? loadedPresets[existingIdx].id
-              : crypto.randomUUID().slice(0, 8);
+          const existingIdx = loadedPresets.findIndex((p) => p.filePath && p.filePath === raw.path);
+          const id = existingIdx >= 0 ? loadedPresets[existingIdx].id : crypto.randomUUID().slice(0, 8);
           const newItem: LoadedPresetItem = {
             id,
             fileName: raw.fileName,
@@ -256,9 +241,7 @@
     resetOperationState();
   }
 
-  async function handleOpenNativeFiles(
-    replaceActive: boolean = false,
-  ): Promise<void> {
+  async function handleOpenNativeFiles(replaceActive: boolean = false): Promise<void> {
     if (replaceActive && isDirty) {
       const ok = await ArchiveService.confirmDiscardChanges();
       if (!ok) return;
@@ -281,14 +264,8 @@
       try {
         const loaded = await ArchiveService.importMchrn(file);
         const id = crypto.randomUUID().slice(0, 8);
-        const savedSnapshot = ArchiveService.createSnapshot(
-          loaded.preset,
-          loaded.timetableCsv,
-        );
-        loadedPresets = [
-          ...loadedPresets,
-          { id, fileName: file.name, savedSnapshot, ...loaded },
-        ];
+        const savedSnapshot = ArchiveService.createSnapshot(loaded.preset, loaded.timetableCsv);
+        loadedPresets = [...loadedPresets, { id, fileName: file.name, savedSnapshot, ...loaded }];
         if (!activePresetId) activePresetId = id;
       } catch (err) {
         console.error(`プリセット読込失敗 (${file.name}):`, err);
@@ -301,9 +278,7 @@
    * 現在アクティブなプリセットを保存する
    * @param forceSaveAs trueの場合は既存パスがあっても「名前をつけて保存」ダイアログを開く
    */
-  async function handleSaveActivePreset(
-    forceSaveAs: boolean = false,
-  ): Promise<void> {
+  async function handleSaveActivePreset(forceSaveAs: boolean = false): Promise<void> {
     if (!activeItem) return;
 
     const targetPath = forceSaveAs ? undefined : activeItem.filePath;
@@ -319,12 +294,8 @@
 
     if (savedPath) {
       activeItem.filePath = savedPath;
-      activeItem.fileName =
-        savedPath.split(/[/\\]/).pop() ?? activeItem.fileName;
-      activeItem.savedSnapshot = ArchiveService.createSnapshot(
-        activeItem.preset,
-        activeItem.timetableCsv,
-      );
+      activeItem.fileName = savedPath.split(/[/\\]/).pop() ?? activeItem.fileName;
+      activeItem.savedSnapshot = ArchiveService.createSnapshot(activeItem.preset, activeItem.timetableCsv);
       ArchiveService.saveRecentPaths(loadedPresets.map((p) => p.filePath));
     }
   }
@@ -333,9 +304,7 @@
    * 画面ビュー切り替え時に未保存の変更があれば確認を行う
    * @param nextView 切り替え先のビュー
    */
-  async function handleViewChange(
-    nextView: "driver" | "editor" | "info",
-  ): Promise<void> {
+  async function handleViewChange(nextView: "driver" | "editor" | "info"): Promise<void> {
     if (currentView === "editor" && nextView !== "editor" && isDirty) {
       const ok = await ArchiveService.confirmDiscardChanges(
         "編集中のプリセットに保存されていない変更があります。このまま別画面へ切り替えますか？",
@@ -379,11 +348,7 @@
    * @param targetId 再生対象の音声IDまたはグループID
    */
   function playStepAudio(targetId?: string): void {
-    const firstFileName = driverAudioPlayer.playFromPreset(
-      preset,
-      audioUrls,
-      targetId,
-    );
+    const firstFileName = driverAudioPlayer.playFromPreset(preset, audioUrls, targetId);
 
     if (firstFileName) {
       const isStandby = hasPresetActions && currentActionIdx === -1;
@@ -420,18 +385,11 @@
       return;
     }
 
-    const clampedIdx = Math.max(
-      0,
-      Math.min(targetIdx, preset.actions.length - 1),
-    );
+    const clampedIdx = Math.max(0, Math.min(targetIdx, preset.actions.length - 1));
     currentActionIdx = clampedIdx;
 
     const maxStopIdx = Math.max(0, (currentTrip?.stops.length ?? 1) - 1);
-    const resolved = PresetService.resolveStateUpTo(
-      preset,
-      clampedIdx,
-      maxStopIdx,
-    );
+    const resolved = PresetService.resolveStateUpTo(preset, clampedIdx, maxStopIdx);
 
     currentStopIdx = resolved.stopIndex;
     if (activeLcdGroupNo !== resolved.lcdGroupNo) {
@@ -540,16 +498,10 @@
         .then(({ loaded, missing }) => {
           registerRawFiles(loaded, false);
           if (missing.length > 0) {
-            const names = missing
-              .map((p) => p.split(/[/\\]/).pop() ?? p)
-              .join(", ");
-            showNotice(
-              `移動または削除されたファイルをスキップしました: ${names}`,
-            );
+            const names = missing.map((p) => p.split(/[/\\]/).pop() ?? p).join(", ");
+            showNotice(`移動または削除されたファイルをスキップしました: ${names}`);
             // 読み込めた有効なパスだけで localStorage を更新
-            ArchiveService.saveRecentPaths(
-              loadedPresets.map((p) => p.filePath),
-            );
+            ArchiveService.saveRecentPaths(loadedPresets.map((p) => p.filePath));
           }
         })
         .finally(() => {
@@ -613,20 +565,11 @@
         onchange={handlePresetChange}
       />
     {/if}
-    <button
-      type="button"
-      class="border circle"
-      onclick={toggleMute}
-      title={isMuted ? "ミュート解除" : "ミュート"}
-    >
+    <button type="button" class="border circle" onclick={toggleMute} title={isMuted ? "ミュート解除" : "ミュート"}>
       <i>{isMuted ? "volume_off" : "volume_up"}</i>
     </button>
     {#if IS_TAURI}
-      <button
-        type="button"
-        class="border"
-        onclick={() => handleOpenNativeFiles(false)}
-      >
+      <button type="button" class="border" onclick={() => handleOpenNativeFiles(false)}>
         <i>folder_open</i>
         <span>mchrn追加読込</span>
       </button>
@@ -671,6 +614,7 @@
           bind:audioUrls={activeItem.audioUrls}
           {isMuted}
           {isDirty}
+          oncreate={handleCreateNewPreset}
           onsave={() => handleSaveActivePreset(false)}
           onsaveas={() => handleSaveActivePreset(true)}
           onimport={IS_TAURI ? () => handleOpenNativeFiles(true) : undefined}
@@ -682,11 +626,7 @@
             プリセットが読み込まれていません。「mchrn追加読込」からファイルを追加するか、新規作成してください。
           </p>
           <nav class="center-align">
-            <button
-              type="button"
-              class="primary"
-              onclick={handleCreateNewPreset}
-            >
+            <button type="button" class="primary" onclick={handleCreateNewPreset}>
               <i>add</i>
               <span>新規プリセットを作成</span>
             </button>

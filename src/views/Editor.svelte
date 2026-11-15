@@ -22,6 +22,7 @@
     audioUrls = $bindable<Record<string, string>>({}),
     isMuted = false,
     isDirty = false,
+    oncreate,
     onsave,
     onsaveas,
     onimport,
@@ -34,6 +35,7 @@
     audioUrls?: Record<string, string>;
     isMuted?: boolean;
     isDirty?: boolean;
+    oncreate?: () => void;
     onsave?: () => void;
     onsaveas?: () => void;
     onimport?: () => void;
@@ -602,6 +604,12 @@
         <span class="chip small amber-text border">* 未保存</span>
       {/if}
     </h5>
+    {#if oncreate}
+      <button type="button" class="border" onclick={oncreate}>
+        <i>add</i>
+        <span>新規作成</span>
+      </button>
+    {/if}
     {#if onimport}
       <button type="button" class="border" onclick={onimport}>
         <i>folder_open</i>
