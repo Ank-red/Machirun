@@ -1,6 +1,7 @@
 <script lang="ts">
   // --- Imports ---
 
+  import { PresetService } from "../core/preset";
   import type { LayerOperationValue, LayerSlot, LcdSlide } from "../core/types";
 
   // --- Props ---
@@ -20,24 +21,15 @@
   // --- Derived ---
 
   /** ベース画像のObject URL */
-  let baseImageUrl = $derived(
-    slide?.baseImageId ? (imageUrls[slide.baseImageId] ?? "") : "",
-  );
+  let baseImageUrl = $derived(slide?.baseImageId ? (imageUrls[slide.baseImageId] ?? "") : "");
 
   /** 表示順序に従って解決されたオーバーレイレイヤー画像のObject URL配列 */
   let resolvedLayerUrls = $derived(
     (slide?.visibleLayers ?? [])
       .map((slotKey) => {
         const slot = layerSlots[slotKey];
-        if (!slot) return null;
-
-        const itemIdx =
-          slide?.layerOverrides?.[slotKey] ?? activeLayerIndices[slotKey];
-        if (itemIdx === null || itemIdx === undefined || itemIdx === "+1") {
-          return null;
-        }
-
-        const hashId = slot.items[String(itemIdx)];
+        const itemIdx = slide?.layerOverrides?.[slotKey] ?? activeLayerIndices[slotKey];
+        const hashId = PresetService.resolveLayerImageHash(slot, itemIdx);
         return hashId ? (imageUrls[hashId] ?? null) : null;
       })
       .filter((url): url is string => Boolean(url)),

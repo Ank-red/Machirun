@@ -28,9 +28,25 @@ export interface AudioGroup {
 export interface LayerSlot {
   /** エディタ上の表示名 (例: "停留所名レイヤー") */
   name: string;
-  /** 車載器の停留所送りと連動させるかどうかのフラグ */
+  /** 停留所データ表と連動させるかどうかのフラグ */
   linkedToCsvStop?: boolean;
-  /** レイヤー番号から ImageAsset のハッシュIDへのマップ */
+  /** 全停留所共通のデフォルト画像ID（未指定停留所の初期値） */
+  defaultItemId?: string;
+  /** 停留所番号（またはレイヤー番号）から ImageAsset のハッシュIDへのマップ（空文字は「前を維持」） */
+  items: Record<string, string>;
+}
+
+/** 停留所進行やフェーズに応じて再生する音声レイヤースロットの定義 */
+export interface AudioSlot {
+  /** エディタ上の表示名 (例: "次停留所案内", "到着・開扉放送") */
+  name: string;
+  /** 停留所データ表の各行で個別に指定するかどうかのフラグ */
+  linkedToCsvStop?: boolean;
+  /** 空欄（未指定）の停留所で、直前の停留所の音声を引き継ぐかどうか（運賃表・行先案内型） */
+  inheritPrevious?: boolean;
+  /** 全停留所共通または初期値となる AudioAsset ID または "group:<番号>" */
+  defaultItemId?: string;
+  /** 停留所番号から AudioAsset ID または "group:<番号>" へのマップ（"__NONE__" で明示的に無音化） */
   items: Record<string, string>;
 }
 
@@ -59,20 +75,58 @@ export interface LcdGroup {
 /** レイヤー番号の操作指示値（番号指定、"+1" で進める、null で非表示） */
 export type LayerOperationValue = number | "+1" | null;
 
-/** 1回のメイン操作（右矢印キー等）で実行されるアクションステップの定義 */
+/** 1停留所あたりの共通進行パターンの1フェーズ定義 */
+export interface ProgressionPhase {
+  /** フェーズID */
+  id: string;
+  /** 車載器上に表示するフェーズ名（例: "案内", "到着 (ドア開)", "発車 (ドア閉)"） */
+  label: string;
+  /** このフェーズで切り替えるLCDグループ番号（undefinedで変更なし） */
+  lcdGroupNo?: number;
+  /** このフェーズで再生する AudioSlot キーの配列（チェックボックスONの項目） */
+  playAudioSlots: string[];
+  /** 始発停留所（#0）でこのフェーズを実行するかどうか */
+  applyAtFirstStop: boolean;
+  /** 途中停留所（#1〜#N-1）でこのフェーズを実行するかどうか */
+  applyAtMiddleStops: boolean;
+  /** 終点停留所（#N）でこのフェーズを実行するかどうか */
+  applyAtLastStop: boolean;
+}
+
+/** 1回のメイン操作（右矢印キー等）で実行されるアクションステップ（自動合成後または例外差し込み用） */
 export interface ActionStep {
   /** ステップ番号（1始まりの連番） */
   stepNo: number;
   /** 車載器上に表示するステップラベル */
   label: string;
+  /** 例外アクションの差し込み位置（-1: 始発の前, 0〜N: 指定停留所インデックスの直後） */
+  insertAfterStopIdx?: number;
   /** ダイヤ表示の停留所インデックス指定、または "+1" で1つ進める */
   setStopIndex?: number | "+1";
-  /** 各レイヤースロットの番号更新指示 */
+  /** 各画像レイヤースロットの番号更新指示 */
   setLayers?: Record<string, LayerOperationValue>;
-  /** 単体の AudioAsset ハッシュID、または "group:<グループ番号>" を指定 */
+  /** このステップで鳴らす音声スロットキー配列（チェックボックス方式） */
+  playAudioSlots?: string[];
+  /** 旧仕様互換または例外ステップ直接指定用の単体音声ID / "group:<番号>" */
   playAudioId?: string;
   /** 切り替える LcdGroup の番号 */
   setLcdGroupNo?: number;
+}
+
+/** 別ショートカットキーによる割り込みアクション定義（降車ボタン「次止まります」等） */
+export interface InterruptAction {
+  /** 割り込み定義の一意ID */
+  id: string;
+  /** 表示ラベル（例: "降車ボタン (次止まります)"） */
+  label: string;
+  /** トリガーとなるキーコード（例: "Space", "Enter", "Digit1"） */
+  shortcutKey: string;
+  /** 割り込み時に切り替えるLCDグループ番号（undefinedで維持） */
+  lcdGroupNo?: number;
+  /** 割り込み時に再生する音声スロットキー配列（チェックボックス方式） */
+  playAudioSlots: string[];
+  /** 直接指定の音声IDまたは "group:<番号>" */
+  playAudioId?: string;
 }
 
 /** 路線・方向ごとのプリセット全体構造 (preset.json) */
@@ -85,8 +139,14 @@ export interface RoutePreset {
   layerSlots: Record<string, LayerSlot>;
   audios: Record<string, AudioAsset>;
   audioGroups?: Record<string, AudioGroup>;
+  audioSlots: Record<string, AudioSlot>;
   lcdGroups: Record<string, LcdGroup>;
+  /** 共通の進行フェーズ定義配列 */
+  progressionPhases: ProgressionPhase[];
+  /** 例外差し込みアクションステップ配列（旧プリセット読込時はレガシーステップを保持） */
   actions: ActionStep[];
+  /** ショートカット割り込みアクション配列 */
+  interrupts: InterruptAction[];
 }
 
 /** アクションステップ畳み込み計算後の解決済み状態 */
@@ -94,15 +154,6 @@ export interface ResolvedActionState {
   stopIndex: number;
   lcdGroupNo: string;
   layerIndices: Record<string, number | null>;
-}
-
-/** CSVからのアクションステップ一括生成マクロの設定パラメータ */
-export interface MacroGenerateParams {
-  pattern: "1-step" | "3-step";
-  runningGroupNo?: number;
-  stoppingGroupNo?: number;
-  arriveAudioId?: string;
-  closeAudioId?: string;
 }
 
 // --- Timetable Types ---

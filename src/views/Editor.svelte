@@ -9,11 +9,7 @@
   import { LcdSyncService } from "../core/lcdSync";
   import { PresetService } from "../core/preset";
   import { TimetableService } from "../core/timetable";
-  import type {
-    ConvertedAssetResult,
-    LcdSlide,
-    RoutePreset,
-  } from "../core/types";
+  import type { ConvertedAssetResult, LcdSlide, RoutePreset } from "../core/types";
 
   // --- Props ---
 
@@ -43,17 +39,38 @@
     onimport?: () => void;
   } = $props();
 
+  // --- Constants ---
+
+  /** 割り込みショートカットとして選択可能なキー一覧 */
+  const SHORTCUT_KEY_OPTIONS = [
+    { value: "Space", label: "Space キー" },
+    { value: "Enter", label: "Enter キー" },
+    { value: "ArrowUp", label: "↑ (上矢印) キー" },
+    { value: "ArrowDown", label: "↓ (下矢印) キー" },
+    { value: "Digit1", label: "1 キー" },
+    { value: "Digit2", label: "2 キー" },
+    { value: "Digit3", label: "3 キー" },
+    { value: "Digit4", label: "4 キー" },
+    { value: "Digit5", label: "5 キー" },
+    { value: "Digit6", label: "6 キー" },
+    { value: "Digit7", label: "7 キー" },
+    { value: "Digit8", label: "8 キー" },
+    { value: "Digit9", label: "9 キー" },
+  ];
+
   // --- Services & Editor UI State ---
 
   /** エディタ内試聴用の音声プレイヤーインスタンス */
   const previewPlayer = new AudioPlayerService();
 
   /** 現在開いている編集タブ */
-  let activeTab = $state<"base" | "layers" | "lcd" | "actions">("base");
+  let activeTab = $state<"base" | "stops" | "lcd" | "actions">("base");
 
   /** 新規レイヤースロット追加用の入力状態 */
+  let newSlotKind = $state<"image" | "audio">("image");
   let newSlotKey = $state("");
   let newSlotName = $state("");
+  let newSlotInherit = $state(false);
 
   /** アセット変換処理中のローディング状態 */
   let isRegisteringImage = $state(false);
@@ -63,19 +80,14 @@
   let isLoopPreviewing = $state(false);
   let previewGroupNo = $state("1");
   let previewSlideIdx = $state(0);
+  let previewStopIdx = $state(0);
   let previewLayerIndices = $state<Record<string, number | null>>({
     stop: 0,
     fare: 0,
   });
-  let activePreviewStepIdx = $state<number | null>(null);
 
-  /** アクションステップの展開・一括生成マクロ設定状態 */
+  /** 例外アクションステップの展開状態 */
   let expandedStepIdx = $state<number | null>(null);
-  let macroPattern = $state<"1-step" | "3-step">("3-step");
-  let macroRunningGroupNo = $state<number | undefined>(1);
-  let macroStoppingGroupNo = $state<number | undefined>(undefined);
-  let macroArriveAudioId = $state<string | undefined>(undefined);
-  let macroCloseAudioId = $state<string | undefined>(undefined);
 
   // --- Derived ---
 
@@ -83,13 +95,20 @@
   let masterStops = $derived(TimetableService.extractMasterStops(timetableCsv));
 
   /** 現在プレビュー中のLCDスライド */
-  let currentPreviewSlide = $derived<LcdSlide | undefined>(
-    preset.lcdGroups[previewGroupNo]?.slides[previewSlideIdx],
-  );
+  let currentPreviewSlide = $derived<LcdSlide | undefined>(preset.lcdGroups[previewGroupNo]?.slides[previewSlideIdx]);
 
-  /** 画像選択ドロップダウン用の選択肢配列 */
+  /** ベース画像選択ドロップダウン用の選択肢配列 */
   let imageOptions = $derived([
     { value: "", label: "-- 画像を選択 --" },
+    ...Object.entries(preset.images).map(([id, asset]) => ({
+      value: id,
+      label: `${asset.originalName} (${id.slice(0, 6)})`,
+    })),
+  ]);
+
+  /** 停留所テーブルの画像セル用（前を維持対応）の選択肢配列 */
+  let tableImageOptions = $derived([
+    { value: "", label: "── (前を維持 / 未指定)" },
     ...Object.entries(preset.images).map(([id, asset]) => ({
       value: id,
       label: `${asset.originalName} (${id.slice(0, 6)})`,
@@ -113,9 +132,8 @@
     })),
   ]);
 
-  /** アクションステップ用（音声グループ＋単体音声）の選択肢配列 */
-  let audioSelectOptions = $derived([
-    { value: undefined, label: "再生しない" },
+  /** 音声グループ＋単体音声の共通選択肢配列 */
+  let audioTargetEntries = $derived([
     ...Object.entries(preset.audioGroups ?? {}).map(([gNo, grp]) => ({
       value: `group:${gNo}`,
       label: `[グループ #${gNo}] ${grp.name}`,
@@ -125,6 +143,34 @@
       label: `${asset.originalName} (${audId.slice(0, 6)})`,
     })),
   ]);
+
+  /** 直接指定用（再生しない＋グループ＋単体音声）の選択肢配列 */
+  let audioSelectOptions = $derived([{ value: undefined, label: "直接指定なし" }, ...audioTargetEntries]);
+
+  /** 停留所テーブル内の音声セル用の選択肢配列を生成するヘルパー */
+  function getTableAudioOptions(inheritPrevious?: boolean): { value: string; label: string }[] {
+    return [
+      {
+        value: "",
+        label: inheritPrevious ? "── (前を維持)" : "── (再生しない)",
+      },
+      ...(inheritPrevious ? [{ value: "__NONE__", label: "🔇 無音にする (継承停止)" }] : []),
+      ...audioTargetEntries,
+    ];
+  }
+
+  /** CSV停留所と連動する画像レイヤー一覧 */
+  let linkedImageSlots = $derived(
+    Object.entries(preset.layerSlots).filter(([, slot]) => slot.linkedToCsvStop !== false),
+  );
+
+  /** CSV停留所と連動する音声レイヤー一覧 */
+  let linkedAudioSlots = $derived(
+    Object.entries(preset.audioSlots ?? {}).filter(([, slot]) => slot.linkedToCsvStop !== false),
+  );
+
+  /** 自動合成された実行ステップ総数（プレビュー確認用） */
+  let effectiveActions = $derived(PresetService.buildEffectiveActions(preset, masterStops));
 
   // --- Unified Asset Management Handlers ---
 
@@ -145,14 +191,9 @@
    * @param targetBlobs 登録先のバイナリ辞書
    * @param targetUrls 登録先のObject URL辞書
    */
-  async function registerAssetsBatch<
-    T extends { fileName: string; originalName: string },
-  >(
+  async function registerAssetsBatch<T extends { fileName: string; originalName: string }>(
     files: FileList,
-    converter: (
-      file: File,
-      existingId?: string,
-    ) => Promise<ConvertedAssetResult<T>>,
+    converter: (file: File, existingId?: string) => Promise<ConvertedAssetResult<T>>,
     targetAssets: Record<string, T>,
     targetBlobs: Record<string, Uint8Array>,
     targetUrls: Record<string, string>,
@@ -178,15 +219,10 @@
    * @param targetBlobs 登録先のバイナリ辞書
    * @param targetUrls 登録先のObject URL辞書
    */
-  async function replaceSingleAsset<
-    T extends { fileName: string; originalName: string },
-  >(
+  async function replaceSingleAsset<T extends { fileName: string; originalName: string }>(
     hashId: string,
     files: FileList,
-    converter: (
-      file: File,
-      existingId?: string,
-    ) => Promise<ConvertedAssetResult<T>>,
+    converter: (file: File, existingId?: string) => Promise<ConvertedAssetResult<T>>,
     targetAssets: Record<string, T>,
     targetBlobs: Record<string, Uint8Array>,
     targetUrls: Record<string, string>,
@@ -228,10 +264,7 @@
    * @param hashId 差し替え対象の画像ハッシュID
    * @param files 選択された画像FileList
    */
-  async function handleImageReplace(
-    hashId: string,
-    files: FileList,
-  ): Promise<void> {
+  async function handleImageReplace(hashId: string, files: FileList): Promise<void> {
     isRegisteringImage = true;
     try {
       await replaceSingleAsset(
@@ -287,10 +320,7 @@
    * @param hashId 差し替え対象の音声ハッシュID
    * @param files 選択された音声FileList
    */
-  async function handleAudioReplace(
-    hashId: string,
-    files: FileList,
-  ): Promise<void> {
+  async function handleAudioReplace(hashId: string, files: FileList): Promise<void> {
     isRegisteringAudio = true;
     try {
       await replaceSingleAsset(
@@ -334,24 +364,49 @@
     };
   }
 
-  // --- Layer & LCD Group Handlers ---
+  // --- Stop Data & Slot Management Handlers ---
 
   /**
-   * 新規レイヤースロットを追加する
+   * 停留所データテーブルで指定した停留所インデックスを右側のLCDプレビューへ反映する
+   * @param stopIdx プレビューする停留所インデックス
    */
-  function handleAddLayerSlot(): void {
+  function selectPreviewStop(stopIdx: number): void {
+    previewStopIdx = stopIdx;
+    for (const [key, slot] of Object.entries(preset.layerSlots)) {
+      if (slot.linkedToCsvStop !== false) {
+        previewLayerIndices[key] = stopIdx;
+      }
+    }
+  }
+
+  /**
+   * 新規の画像レイヤーまたは音声レイヤースロットを追加する
+   */
+  function handleAddSlot(): void {
     const key = newSlotKey.trim();
     const name = newSlotName.trim();
-    if (!key || !name || preset.layerSlots[key]) return;
+    if (!key || !name) return;
 
-    preset.layerSlots[key] = { name, linkedToCsvStop: false, items: {} };
-    previewLayerIndices[key] = 0;
+    if (newSlotKind === "image") {
+      if (preset.layerSlots[key]) return;
+      preset.layerSlots[key] = { name, linkedToCsvStop: true, items: {} };
+      previewLayerIndices[key] = previewStopIdx;
+    } else {
+      if (preset.audioSlots[key]) return;
+      preset.audioSlots[key] = {
+        name,
+        linkedToCsvStop: true,
+        inheritPrevious: newSlotInherit,
+        items: {},
+      };
+    }
+
     newSlotKey = "";
     newSlotName = "";
   }
 
   /**
-   * レイヤースロットを削除する
+   * 画像レイヤースロットを削除する
    * @param slotKey 削除対象のスロットキー
    */
   function handleRemoveLayerSlot(slotKey: string): void {
@@ -360,18 +415,14 @@
   }
 
   /**
-   * CSVのマスター停留所数に合わせてレイヤースロットの番号枠を作成する
-   * @param slotKey 対象のスロットキー
+   * 音声レイヤースロットを削除する
+   * @param slotKey 削除対象の音声スロットキー
    */
-  function syncSlotItemsWithCsv(slotKey: string): void {
-    const slot = preset.layerSlots[slotKey];
-    if (!slot || masterStops.length === 0) return;
-
-    for (let i = 0; i < masterStops.length; i++) {
-      const no = String(i);
-      if (!(no in slot.items)) slot.items[no] = "";
-    }
+  function handleRemoveAudioSlot(slotKey: string): void {
+    PresetService.removeAudioSlot(preset, slotKey);
   }
+
+  // --- LCD Group Handlers ---
 
   /**
    * 新規LCDグループを追加する
@@ -422,38 +473,44 @@
     }
   }
 
-  // --- Action Step & Preview Simulation Handlers ---
+  // --- Progression Phases & Interrupts Handlers ---
 
   /**
-   * 指定インデックスまでのステップを畳み込み、LCDプレビューと音声再生をテストする
-   * @param targetIdx テスト対象のステップインデックス
+   * 進行フェーズにテンプレートを適用する（既存のレガシー手動ステップがあればクリアして自動合成へ切り替える）
+   * @param pattern "1-step" または "3-step"
    */
-  function simulateStepAt(targetIdx: number): void {
-    activePreviewStepIdx = targetIdx;
-    const resolved = PresetService.resolveStateUpTo(preset, targetIdx);
-    previewGroupNo = resolved.lcdGroupNo;
-    previewSlideIdx = 0;
-    previewLayerIndices = resolved.layerIndices;
-
-    previewPlayer.playFromPreset(
-      preset,
-      audioUrls,
-      preset.actions[targetIdx]?.playAudioId,
-    );
+  function applyPhaseTemplate(pattern: "1-step" | "3-step"): void {
+    preset.progressionPhases = PresetService.createPhaseTemplate(pattern);
+    preset.actions = preset.actions.filter((a) => a.insertAfterStopIdx !== undefined);
   }
 
   /**
-   * マクロ設定に基づきCSV停留所から全アクションステップを一括生成する
+   * 進行フェーズを1つ追加する
    */
-  function handleGenerateStepsFromCsv(): void {
-    PresetService.generateStepsFromCsv(preset, masterStops, {
-      pattern: macroPattern,
-      runningGroupNo: macroRunningGroupNo,
-      stoppingGroupNo: macroStoppingGroupNo,
-      arriveAudioId: macroArriveAudioId,
-      closeAudioId: macroCloseAudioId,
+  function handleAddPhase(): void {
+    preset.progressionPhases.push({
+      id: `phase_${crypto.randomUUID().slice(0, 6)}`,
+      label: `フェーズ #${preset.progressionPhases.length + 1}`,
+      lcdGroupNo: undefined,
+      playAudioSlots: [],
+      applyAtFirstStop: true,
+      applyAtMiddleStops: true,
+      applyAtLastStop: true,
     });
-    expandedStepIdx = null;
+  }
+
+  /**
+   * ショートカット割り込みアクションを1つ追加する
+   */
+  function handleAddInterrupt(): void {
+    preset.interrupts.push({
+      id: `intr_${crypto.randomUUID().slice(0, 6)}`,
+      label: "次止まります (降車ボタン)",
+      shortcutKey: "Space",
+      lcdGroupNo: undefined,
+      playAudioSlots: [],
+      playAudioId: undefined,
+    });
   }
 
   // --- Archive Export / Import Handlers ---
@@ -551,12 +608,7 @@
         <span>読み込み</span>
       </button>
     {:else}
-      <FileButton
-        label="読み込み"
-        icon="folder_open"
-        accept=".mchrn,.zip"
-        onselect={handleImport}
-      />
+      <FileButton label="読み込み" icon="folder_open" accept=".mchrn,.zip" onselect={handleImport} />
     {/if}
     <button
       type="button"
@@ -567,12 +619,7 @@
       <i>save_as</i>
       <span>名前をつけて保存</span>
     </button>
-    <button
-      type="button"
-      class="primary"
-      onclick={() => (onsave ? onsave() : handleExport())}
-      title="Ctrl + S"
-    >
+    <button type="button" class="primary" onclick={() => (onsave ? onsave() : handleExport())} title="Ctrl + S">
       <i>save</i>
       <span>上書き保存</span>
     </button>
@@ -582,22 +629,10 @@
     <!-- 左カラム：編集タブ -->
     <div class="s12 m7">
       <div class="tabs left-align">
-        <a
-          class:active={activeTab === "base"}
-          onclick={() => (activeTab = "base")}>1. 基本・素材</a
-        >
-        <a
-          class:active={activeTab === "layers"}
-          onclick={() => (activeTab = "layers")}>2. レイヤー</a
-        >
-        <a
-          class:active={activeTab === "lcd"}
-          onclick={() => (activeTab = "lcd")}>3. LCDグループ</a
-        >
-        <a
-          class:active={activeTab === "actions"}
-          onclick={() => (activeTab = "actions")}>4. アクション</a
-        >
+        <a class:active={activeTab === "base"} onclick={() => (activeTab = "base")}>1. 基本・素材</a>
+        <a class:active={activeTab === "stops"} onclick={() => (activeTab = "stops")}>2. 停留所</a>
+        <a class:active={activeTab === "lcd"} onclick={() => (activeTab = "lcd")}>3. LCDグループ</a>
+        <a class:active={activeTab === "actions"} onclick={() => (activeTab = "actions")}>4. アクション</a>
       </div>
 
       <!-- タブ1: 基本情報・CSV・画像・音声登録 -->
@@ -609,18 +644,11 @@
           </div>
 
           <h6>ダイヤグラム (timetable.csv)</h6>
-          <FileButton
-            label="CSVを選択"
-            icon="upload_file"
-            accept=".csv"
-            onselect={handleCsvRegister}
-          />
+          <FileButton label="CSVを選択" icon="upload_file" accept=".csv" onselect={handleCsvRegister} />
 
           {#if masterStops.length > 0}
             <p>
-              検出された停留所 ({masterStops.length}件): {masterStops.join(
-                " → ",
-              )}
+              検出された停留所 ({masterStops.length}件): {masterStops.join(" → ")}
             </p>
           {/if}
 
@@ -673,8 +701,7 @@
               <button
                 type="button"
                 class="small transparent circle"
-                onclick={() =>
-                  previewPlayer.playFromPreset(preset, audioUrls, hashId)}
+                onclick={() => previewPlayer.playFromPreset(preset, audioUrls, hashId)}
                 title="試聴"
               >
                 <i>volume_up</i>
@@ -701,14 +728,8 @@
 
           <div class="space"></div>
           <div class="row wrap-row">
-            <h6 class="max no-margin">
-              音声グループ (チャイム＋放送などの連続再生セット)
-            </h6>
-            <button
-              type="button"
-              class="small border"
-              onclick={handleAddAudioGroup}
-            >
+            <h6 class="max no-margin">音声グループ (チャイム＋放送などの連続再生セット)</h6>
+            <button type="button" class="small border" onclick={handleAddAudioGroup}>
               <i>add</i>
               <span>グループ追加</span>
             </button>
@@ -718,30 +739,17 @@
               <div class="row wrap-row">
                 <span class="bold">#{gNo}</span>
                 <div class="field border max no-margin">
-                  <input
-                    type="text"
-                    bind:value={grp.name}
-                    placeholder="グループ名"
-                  />
+                  <input type="text" bind:value={grp.name} placeholder="グループ名" />
                 </div>
                 <button
                   type="button"
                   class="small border"
-                  onclick={() =>
-                    previewPlayer.playFromPreset(
-                      preset,
-                      audioUrls,
-                      `group:${gNo}`,
-                    )}
+                  onclick={() => previewPlayer.playFromPreset(preset, audioUrls, `group:${gNo}`)}
                 >
                   <i>play_arrow</i>
                   <span>連続試聴</span>
                 </button>
-                <button
-                  type="button"
-                  class="small border"
-                  onclick={() => (grp.audioIds = [...grp.audioIds, ""])}
-                >
+                <button type="button" class="small border" onclick={() => (grp.audioIds = [...grp.audioIds, ""])}>
                   <i>add</i>
                   <span>音声追加</span>
                 </button>
@@ -756,16 +764,8 @@
               {#each grp.audioIds as _, aIdx (aIdx)}
                 <div class="row item-row top-margin">
                   <span>{aIdx + 1}.</span>
-                  <Dropdown
-                    full={true}
-                    bind:value={grp.audioIds[aIdx]}
-                    options={singleAudioOptions}
-                  />
-                  <button
-                    type="button"
-                    class="small transparent circle"
-                    onclick={() => grp.audioIds.splice(aIdx, 1)}
-                  >
+                  <Dropdown full={true} bind:value={grp.audioIds[aIdx]} options={singleAudioOptions} />
+                  <button type="button" class="small transparent circle" onclick={() => grp.audioIds.splice(aIdx, 1)}>
                     <i>close</i>
                   </button>
                 </div>
@@ -775,97 +775,209 @@
         </article>
       {/if}
 
-      <!-- タブ2: レイヤースロット設定 -->
-      {#if activeTab === "layers"}
-        {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
-          <article class="border padding top-margin">
-            <div class="row wrap-row">
-              <h6 class="max no-margin">
-                {slot.name} <small>(ID: <code>{slotKey}</code>)</small>
-              </h6>
+      <!-- タブ2: 停留所データ・画像/音声レイヤー定義 -->
+      {#if activeTab === "stops"}
+        <article class="border padding">
+          <div class="row wrap-row">
+            <h6 class="max no-margin">停留所データ</h6>
+            <span class="small-text">
+              ※行をクリックすると右側のLCDプレビューに反映されます。空欄（前を維持）のセルは上の停留所の設定を自動で引き継ぎます。
+            </span>
+          </div>
+
+          {#if masterStops.length === 0}
+            <p class="top-margin">
+              「1. 基本・素材」タブでダイヤグラム (timetable.csv) を読み込むと、ここに全停留所の一覧表が表示されます。
+            </p>
+          {:else}
+            <table class="border stop-table">
+              <thead>
+                <tr>
+                  <th class="stop-col-no">#</th>
+                  <th class="stop-col-name">停留所名</th>
+                  {#each linkedImageSlots as [slotKey, slot] (slotKey)}
+                    <th class="stop-col-slot">
+                      <div class="slot-header">
+                        <i>image</i>
+                        <span>{slot.name}</span>
+                        <code>({slotKey})</code>
+                      </div>
+                    </th>
+                  {/each}
+                  {#each linkedAudioSlots as [slotKey, slot] (slotKey)}
+                    <th class="stop-col-slot">
+                      <div class="slot-header">
+                        <i>volume_up</i>
+                        <span>{slot.name}</span>
+                        <code>({slotKey})</code>
+                      </div>
+                    </th>
+                  {/each}
+                </tr>
+              </thead>
+              <tbody>
+                {#each masterStops as stopName, sIdx (sIdx)}
+                  {@const keyStr = String(sIdx)}
+                  <tr class:active-row={previewStopIdx === sIdx} onclick={() => selectPreviewStop(sIdx)}>
+                    <td class="bold">#{sIdx}</td>
+                    <td class="bold stop-name-cell">{stopName}</td>
+
+                    {#each linkedImageSlots as [slotKey, slot] (slotKey)}
+                      {@const effectiveHash = PresetService.resolveLayerImageHash(slot, sIdx)}
+                      <td>
+                        <Dropdown
+                          full={true}
+                          value={slot.items[keyStr] ?? ""}
+                          onchange={(val) => {
+                            slot.items[keyStr] = val;
+                            selectPreviewStop(sIdx);
+                          }}
+                          options={tableImageOptions}
+                        />
+                        {#if !slot.items[keyStr] && effectiveHash && preset.images[effectiveHash]}
+                          <div class="inherited-hint">
+                            ↳ {preset.images[effectiveHash].originalName}
+                          </div>
+                        {/if}
+                      </td>
+                    {/each}
+
+                    {#each linkedAudioSlots as [slotKey, slot] (slotKey)}
+                      {@const effectiveAudId = PresetService.resolveAudioSlotTargetId(slot, sIdx)}
+                      <td>
+                        <div class="row item-row no-margin">
+                          <Dropdown
+                            full={true}
+                            value={slot.items[keyStr] ?? ""}
+                            onchange={(val) => {
+                              slot.items[keyStr] = val;
+                            }}
+                            options={getTableAudioOptions(slot.inheritPrevious)}
+                          />
+                          {#if effectiveAudId}
+                            <button
+                              type="button"
+                              class="small transparent circle"
+                              title="この停留所で鳴る音声を試聴"
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                previewPlayer.playFromPreset(preset, audioUrls, effectiveAudId);
+                              }}
+                            >
+                              <i>play_arrow</i>
+                            </button>
+                          {/if}
+                        </div>
+                      </td>
+                    {/each}
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        </article>
+
+        <!-- レイヤー列（画像・音声スロット）の管理パネル -->
+        <article class="border padding top-margin">
+          <h6>レイヤー枠（テーブル列・非連動素材）の管理</h6>
+
+          <p class="bold small-text no-margin">画像レイヤー:</p>
+          {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
+            <div class="row wrap-row top-margin">
+              <div class="field border small max no-margin">
+                <input type="text" bind:value={slot.name} />
+              </div>
+              <code>{slotKey}</code>
               <label class="checkbox">
                 <input type="checkbox" bind:checked={slot.linkedToCsvStop} />
-                <span>CSV停留所と連動</span>
+                <span>停留所テーブル連動</span>
               </label>
               <button
                 type="button"
-                class="small transparent circle"
+                class="small transparent circle error-text"
                 onclick={() => handleRemoveLayerSlot(slotKey)}
+                title="レイヤー削除"
               >
                 <i>delete</i>
               </button>
             </div>
+          {/each}
 
+          <div class="space"></div>
+          <p class="bold small-text no-margin">音声レイヤー:</p>
+          {#each Object.entries(preset.audioSlots ?? {}) as [slotKey, slot] (slotKey)}
             <div class="row wrap-row top-margin">
+              <div class="field border small max no-margin">
+                <input type="text" bind:value={slot.name} />
+              </div>
+              <code>{slotKey}</code>
+              <label class="checkbox">
+                <input type="checkbox" bind:checked={slot.linkedToCsvStop} />
+                <span>停留所テーブル連動</span>
+              </label>
+              {#if slot.linkedToCsvStop}
+                <label class="checkbox">
+                  <input type="checkbox" bind:checked={slot.inheritPrevious} />
+                  <span>空欄時は前を維持 (運賃・行先型)</span>
+                </label>
+              {:else}
+                <Dropdown
+                  bind:value={slot.defaultItemId}
+                  options={[{ value: "", label: "-- 共通音声を選択 --" }, ...audioTargetEntries]}
+                />
+              {/if}
               <button
                 type="button"
-                class="small border"
-                onclick={() => {
-                  const nums = Object.keys(slot.items)
-                    .map(Number)
-                    .filter((n) => !Number.isNaN(n));
-                  const nextNo = nums.length > 0 ? Math.max(...nums) + 1 : 0;
-                  slot.items[String(nextNo)] = "";
-                }}
+                class="small transparent circle error-text"
+                onclick={() => handleRemoveAudioSlot(slotKey)}
+                title="音声レイヤー削除"
               >
-                <i>add</i>
-                <span>番号を追加</span>
+                <i>delete</i>
               </button>
-              {#if slot.linkedToCsvStop && masterStops.length > 0}
-                <button
-                  type="button"
-                  class="small border"
-                  onclick={() => syncSlotItemsWithCsv(slotKey)}
-                >
-                  <i>sync</i>
-                  <span>CSV停留所数 ({masterStops.length}件) の枠を作成</span>
-                </button>
-              {/if}
             </div>
+          {/each}
 
-            <div class="space"></div>
-
-            {#each Object.keys(slot.items) as no (no)}
-              <div class="row item-row">
-                <span class="bold">#{no}</span>
-                {#if slot.linkedToCsvStop && masterStops[Number(no)]}
-                  <span class="chip small stop-chip">
-                    {masterStops[Number(no)]}
-                  </span>
-                {/if}
-                <Dropdown
-                  full={true}
-                  bind:value={slot.items[no]}
-                  options={imageOptions}
-                />
-                <button
-                  type="button"
-                  class="small transparent circle"
-                  onclick={() => delete slot.items[no]}
-                >
-                  <i>close</i>
-                </button>
+          <hr class="small-divider" />
+          <h6>新規レイヤー枠の追加</h6>
+          <div class="grid">
+            <div class="s12 m4">
+              <Dropdown
+                full={true}
+                label="種類"
+                bind:value={newSlotKind}
+                options={[
+                  { value: "image", label: "画像レイヤー" },
+                  { value: "audio", label: "音声レイヤー" },
+                ]}
+              />
+            </div>
+            <div class="s12 m4">
+              <div class="field label border no-margin">
+                <input type="text" bind:value={newSlotKey} />
+                <label>ID (英数字)</label>
               </div>
-            {/each}
-          </article>
-        {/each}
-
-        <!-- 新規スロット追加フォーム -->
-        <article class="border padding top-margin">
-          <h6>新規レイヤースロットの追加</h6>
-          <div class="field label border">
-            <input type="text" bind:value={newSlotKey} />
-            <label>スロットID (英数字)</label>
+            </div>
+            <div class="s12 m4">
+              <div class="field label border no-margin">
+                <input type="text" bind:value={newSlotName} />
+                <label>表示名</label>
+              </div>
+            </div>
           </div>
-          <div class="field label border">
-            <input type="text" bind:value={newSlotName} />
-            <label>表示名</label>
+          <div class="row wrap-row top-margin">
+            {#if newSlotKind === "audio"}
+              <label class="checkbox max">
+                <input type="checkbox" bind:checked={newSlotInherit} />
+                <span>空欄時は前の停留所の音声を維持する</span>
+              </label>
+            {:else}
+              <div class="max"></div>
+            {/if}
+            <button type="button" class="primary" onclick={handleAddSlot}>
+              <i>add</i>
+              <span>レイヤー枠を追加</span>
+            </button>
           </div>
-          <div class="space"></div>
-          <button type="button" class="primary" onclick={handleAddLayerSlot}>
-            <i>add</i>
-            <span>スロット追加</span>
-          </button>
         </article>
       {/if}
 
@@ -885,11 +997,7 @@
               <span>新規</span>
             </button>
             {#if Object.keys(preset.lcdGroups).length > 1}
-              <button
-                type="button"
-                class="border error-text"
-                onclick={() => handleRemoveLcdGroup(previewGroupNo)}
-              >
+              <button type="button" class="border error-text" onclick={() => handleRemoveLcdGroup(previewGroupNo)}>
                 <i>delete</i>
               </button>
             {/if}
@@ -907,11 +1015,7 @@
                 <input type="checkbox" bind:checked={currentGroup.loop} />
                 <span>スライドをループ再生する</span>
               </label>
-              <button
-                type="button"
-                class="border"
-                onclick={() => handleAddSlide(previewGroupNo)}
-              >
+              <button type="button" class="border" onclick={() => handleAddSlide(previewGroupNo)}>
                 <i>add_photo_alternate</i>
                 <span>スライド追加</span>
               </button>
@@ -919,7 +1023,6 @@
           {/if}
         </article>
 
-        <!-- 選択中グループ内のスライド一覧 -->
         {#if preset.lcdGroups[previewGroupNo]}
           {@const currentGroup = preset.lcdGroups[previewGroupNo]}
           {#each currentGroup.slides as slide, sIdx (sIdx)}
@@ -954,17 +1057,10 @@
               </div>
 
               <div class="space"></div>
-              <Dropdown
-                full={true}
-                label="ベース画像"
-                bind:value={slide.baseImageId}
-                options={imageOptions}
-              />
+              <Dropdown full={true} label="ベース画像" bind:value={slide.baseImageId} options={imageOptions} />
 
               <div class="space"></div>
-              <p class="bold no-margin">
-                重ねるレイヤー（チェック順＝下から重ねる順）:
-              </p>
+              <p class="bold no-margin">重ねる画像レイヤー（チェック順＝下から重ねる順）:</p>
               {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
                 {@const isVisible = slide.visibleLayers.includes(slotKey)}
                 <div class="row wrap-row">
@@ -972,12 +1068,7 @@
                     <input
                       type="checkbox"
                       checked={isVisible}
-                      onchange={(e) =>
-                        PresetService.toggleSlideLayer(
-                          slide,
-                          slotKey,
-                          e.currentTarget.checked,
-                        )}
+                      onchange={(e) => PresetService.toggleSlideLayer(slide, slotKey, e.currentTarget.checked)}
                     />
                     <span>{slot.name} (<code>{slotKey}</code>)</span>
                   </label>
@@ -989,12 +1080,7 @@
                         min="0"
                         placeholder="連動"
                         value={slide.layerOverrides?.[slotKey] ?? ""}
-                        oninput={(e) =>
-                          PresetService.setSlideLayerOverride(
-                            slide,
-                            slotKey,
-                            e.currentTarget.value,
-                          )}
+                        oninput={(e) => PresetService.setSlideLayerOverride(slide, slotKey, e.currentTarget.value)}
                       />
                       <label>番号固定</label>
                     </div>
@@ -1006,264 +1092,291 @@
         {/if}
       {/if}
 
-      <!-- タブ4: アクションステップ設定 -->
+      <!-- タブ4: 基本進行パターン・割り込み・例外アクション設定 -->
       {#if activeTab === "actions"}
-        <!-- 一括自動生成マクロパネル -->
-        <article class="border">
-          <h6>CSV停留所から一括自動生成</h6>
-          {#if masterStops.length === 0}
-            <p class="small-text">
-              ※「1.
-              基本・素材」タブでダイヤグラムCSVを読み込むと、全停留所分のステップを自動生成できます。
-            </p>
-          {:else}
-            <div class="grid">
-              <div class="s12 m4">
+        <!-- ① 1停留所あたりの基本進行パターン定義 -->
+        <article class="border padding">
+          <div class="row wrap-row">
+            <h6 class="max no-margin">
+              1停留所あたりの基本進行パターン (自動展開: 全{effectiveActions.length}ステップ)
+            </h6>
+            <button type="button" class="small border" onclick={() => applyPhaseTemplate("1-step")}>
+              <span>1段階 (案内のみ)</span>
+            </button>
+            <button type="button" class="small border" onclick={() => applyPhaseTemplate("3-step")}>
+              <span>3段階 (案内・到着・発車)</span>
+            </button>
+            <button type="button" class="small primary" onclick={handleAddPhase}>
+              <i>add</i>
+              <span>フェーズ追加</span>
+            </button>
+          </div>
+          <p class="small-text">
+            ここで定義したフェーズが「2.
+            停留所」の全停留所に対して自動的に適用されます。各フェーズで鳴らす音声レイヤーにチェックを入れてください。
+          </p>
+
+          {#each preset.progressionPhases as phase, pIdx (phase.id)}
+            <article class="border top-margin">
+              <div class="row wrap-row">
+                <span class="chip small bold">段階 {pIdx + 1}</span>
+                <div class="field border small max no-margin">
+                  <input type="text" bind:value={phase.label} placeholder="フェーズ表示名" />
+                </div>
                 <Dropdown
-                  full={true}
-                  label="生成パターン"
-                  bind:value={macroPattern}
+                  bind:value={phase.lcdGroupNo}
                   options={[
-                    { value: "1-step", label: "1段階式 (案内のみ)" },
-                    { value: "3-step", label: "3段階式 (発車・到着・閉扉)" },
-                  ]}
-                />
-              </div>
-              <div class="s12 m4">
-                <Dropdown
-                  full={true}
-                  label="走行中LCDグループ"
-                  bind:value={macroRunningGroupNo}
-                  options={[
-                    { value: undefined, label: "指定なし" },
+                    { value: undefined, label: "LCD切替なし (維持)" },
                     ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
                       value: Number(gNo),
-                      label: `#${gNo}: ${grp.name}`,
+                      label: `LCD #${gNo}: ${grp.name}`,
                     })),
                   ]}
                 />
+                {#if preset.progressionPhases.length > 1}
+                  <button
+                    type="button"
+                    class="small transparent circle error-text"
+                    onclick={() => preset.progressionPhases.splice(pIdx, 1)}
+                  >
+                    <i>delete</i>
+                  </button>
+                {/if}
               </div>
-              {#if macroPattern === "3-step"}
-                <div class="s12 m4">
-                  <Dropdown
-                    full={true}
-                    label="停車中LCDグループ"
-                    bind:value={macroStoppingGroupNo}
-                    options={[
-                      { value: undefined, label: "切替なし" },
-                      ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
-                        value: Number(gNo),
-                        label: `#${gNo}: ${grp.name}`,
-                      })),
-                    ]}
-                  />
-                </div>
-                <div class="s12 m6">
-                  <Dropdown
-                    full={true}
-                    label="到着・開扉時の共通音声"
-                    bind:value={macroArriveAudioId}
-                    options={audioSelectOptions}
-                  />
-                </div>
-                <div class="s12 m6">
-                  <Dropdown
-                    full={true}
-                    label="ドア閉め時の共通音声"
-                    bind:value={macroCloseAudioId}
-                    options={audioSelectOptions}
-                  />
-                </div>
-              {/if}
-            </div>
-            <div class="row wrap-row top-margin">
-              <span class="small-text max">
-                対象: {masterStops.length}停留所 ({macroPattern === "1-step"
-                  ? masterStops.length
-                  : masterStops.length * 3 - 1}ステップ)
-              </span>
-              <button
-                type="button"
-                class="border"
-                onclick={handleGenerateStepsFromCsv}
-              >
-                <i>auto_awesome</i>
-                <span>全停留所分を一括生成</span>
-              </button>
-            </div>
-          {/if}
+
+              <div class="row wrap-row top-margin">
+                <span class="small-text bold">鳴らす音声レイヤー:</span>
+                {#each Object.entries(preset.audioSlots ?? {}) as [slotKey, slot] (slotKey)}
+                  {@const isChecked = phase.playAudioSlots.includes(slotKey)}
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onchange={(e) => {
+                        phase.playAudioSlots = PresetService.toggleKeyInList(
+                          phase.playAudioSlots,
+                          slotKey,
+                          e.currentTarget.checked,
+                        );
+                      }}
+                    />
+                    <span>{slot.name}</span>
+                  </label>
+                {/each}
+              </div>
+
+              <div class="row wrap-row top-margin">
+                <span class="small-text bold">適用する停留所:</span>
+                <label class="checkbox">
+                  <input type="checkbox" bind:checked={phase.applyAtFirstStop} />
+                  <span>始発 (#0)</span>
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" bind:checked={phase.applyAtMiddleStops} />
+                  <span>途中停留所</span>
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" bind:checked={phase.applyAtLastStop} />
+                  <span>終点</span>
+                </label>
+              </div>
+            </article>
+          {/each}
         </article>
 
-        <!-- ステップ一覧ヘッダー -->
-        <article class="border top-margin">
+        <!-- ② ショートカット割り込みアクション定義 -->
+        <article class="border padding top-margin">
           <div class="row wrap-row">
-            <h6 class="max no-margin">
-              アクションステップ一覧 ({preset.actions.length}件)
-            </h6>
-            <button
-              type="button"
-              class="primary"
-              onclick={() => {
-                PresetService.addActionStep(preset);
-                expandedStepIdx = preset.actions.length - 1;
-              }}
-            >
+            <h6 class="max no-margin">割り込みアクション (「次止まります」等の別ショートカット)</h6>
+            <button type="button" class="small primary" onclick={handleAddInterrupt}>
               <i>add</i>
-              <span>ステップ追加</span>
+              <span>割り込み追加</span>
             </button>
           </div>
-        </article>
 
-        <!-- コンパクト折りたたみ式ステップリスト -->
-        {#each preset.actions as step, idx (step.stepNo)}
-          {@const isExpanded = expandedStepIdx === idx}
-          <article
-            class="border top-margin step-card"
-            class:fill={activePreviewStepIdx === idx}
-          >
-            <div
-              class="row wrap-row step-header"
-              onclick={() => (expandedStepIdx = isExpanded ? null : idx)}
-            >
-              <i>{isExpanded ? "expand_less" : "expand_more"}</i>
-              <span class="chip small bold">#{step.stepNo}</span>
-              <span class="bold max step-title">{step.label}</span>
+          {#if (preset.interrupts ?? []).length === 0}
+            <p class="small-text">
+              降車ボタン音や「次止まります」のLCD切り替えなど、通常のステップ進行とは独立したキー操作を追加できます。
+            </p>
+          {/if}
 
-              {#if step.setStopIndex !== undefined}
-                <span class="chip small">
-                  停留所: {step.setStopIndex === "+1"
-                    ? "+1"
-                    : `#${step.setStopIndex}`}
-                </span>
-              {/if}
-              {#if step.setLcdGroupNo !== undefined}
-                <span class="chip small">LCD #{step.setLcdGroupNo}</span>
-              {/if}
-              {#if step.playAudioId}
-                <span class="chip small"><i>volume_up</i></span>
-              {/if}
-
-              <div class="row no-space" onclick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  class="small border"
-                  onclick={() => simulateStepAt(idx)}
-                >
-                  <i>play_circle</i>
-                  <span>テスト</span>
-                </button>
-                <button
-                  type="button"
-                  class="small transparent circle"
-                  disabled={idx === 0}
-                  onclick={() => PresetService.moveActionStep(preset, idx, -1)}
-                >
-                  <i>arrow_upward</i>
-                </button>
-                <button
-                  type="button"
-                  class="small transparent circle"
-                  disabled={idx === preset.actions.length - 1}
-                  onclick={() => PresetService.moveActionStep(preset, idx, 1)}
-                >
-                  <i>arrow_downward</i>
-                </button>
-                <button
-                  type="button"
-                  class="small transparent circle"
-                  onclick={() => PresetService.duplicateActionStep(preset, idx)}
-                >
-                  <i>content_copy</i>
-                </button>
+          {#each preset.interrupts ?? [] as intr, iIdx (intr.id)}
+            <article class="border top-margin">
+              <div class="row wrap-row">
+                <div class="field border small max no-margin">
+                  <input type="text" bind:value={intr.label} placeholder="割り込み名" />
+                </div>
+                <Dropdown bind:value={intr.shortcutKey} options={SHORTCUT_KEY_OPTIONS} />
+                <Dropdown
+                  bind:value={intr.lcdGroupNo}
+                  options={[
+                    { value: undefined, label: "LCD切替なし" },
+                    ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
+                      value: Number(gNo),
+                      label: `LCD #${gNo}: ${grp.name}`,
+                    })),
+                  ]}
+                />
                 <button
                   type="button"
                   class="small transparent circle error-text"
-                  onclick={() => PresetService.removeActionStep(preset, idx)}
+                  onclick={() => preset.interrupts.splice(iIdx, 1)}
                 >
                   <i>delete</i>
                 </button>
               </div>
-            </div>
 
-            {#if isExpanded}
-              <div class="space"></div>
-              <div class="field label border no-bottom-margin">
-                <input type="text" bind:value={step.label} />
-                <label>ステップ表示名</label>
+              <div class="row wrap-row top-margin">
+                <span class="small-text bold">鳴らす音声レイヤー:</span>
+                {#each Object.entries(preset.audioSlots ?? {}) as [slotKey, slot] (slotKey)}
+                  {@const isChecked = intr.playAudioSlots.includes(slotKey)}
+                  <label class="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onchange={(e) => {
+                        intr.playAudioSlots = PresetService.toggleKeyInList(
+                          intr.playAudioSlots,
+                          slotKey,
+                          e.currentTarget.checked,
+                        );
+                      }}
+                    />
+                    <span>{slot.name}</span>
+                  </label>
+                {/each}
               </div>
 
-              <div class="grid top-margin">
-                <div class="s12 m6">
-                  <Dropdown
-                    full={true}
-                    label="車載器ダイヤ停留所"
-                    bind:value={step.setStopIndex}
-                    options={[
-                      { value: undefined, label: "変更なし" },
-                      { value: "+1", label: "次の停留所へ (+1)" },
-                      ...masterStops.map((stopName, sIdx) => ({
-                        value: sIdx,
-                        label: `#${sIdx}: ${stopName}`,
-                      })),
-                    ]}
-                  />
-                </div>
+              <div class=" top-margin">
+                <Dropdown
+                  full={true}
+                  label="または単体音声・音声グループを直接指定"
+                  bind:value={intr.playAudioId}
+                  options={audioSelectOptions}
+                />
+              </div>
+            </article>
+          {/each}
+        </article>
 
-                <div class="s12 m6">
-                  <Dropdown
-                    full={true}
-                    label="LCDグループ切替"
-                    bind:value={step.setLcdGroupNo}
-                    options={[
-                      { value: undefined, label: "変更なし" },
-                      ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
-                        value: Number(gNo),
-                        label: `#${gNo}: ${grp.name}`,
-                      })),
-                    ]}
-                  />
-                </div>
+        <!-- ③ 例外アクションの差し込み -->
+        <article class="border padding top-margin">
+          <div class="row wrap-row">
+            <h6 class="max no-margin">
+              例外アクションの差し込み ({preset.actions.length}件)
+            </h6>
+            <button
+              type="button"
+              class="small border"
+              onclick={() => {
+                PresetService.addExceptionStep(preset);
+                expandedStepIdx = preset.actions.length - 1;
+              }}
+            >
+              <i>add</i>
+              <span>例外ステップ追加</span>
+            </button>
+          </div>
+          <p class="small-text">
+            始発前の業務放送や特定停留所でのみ挟む特別なアナウンスなど、基本進行パターン以外の例外ステップを差し込みます。
+          </p>
 
-                <div class="s12">
-                  <Dropdown
-                    full={true}
-                    label="再生する音声 / 音声グループ"
-                    bind:value={step.playAudioId}
-                    options={audioSelectOptions}
-                  />
+          {#each preset.actions as step, idx (step.stepNo)}
+            {@const isExpanded = expandedStepIdx === idx}
+            <article class="border top-margin step-card">
+              <div class="row wrap-row step-header" onclick={() => (expandedStepIdx = isExpanded ? null : idx)}>
+                <i>{isExpanded ? "expand_less" : "expand_more"}</i>
+                <span class="chip small bold">例外 #{idx + 1}</span>
+                <span class="bold max step-title">{step.label}</span>
+                {#if step.insertAfterStopIdx !== undefined}
+                  <span class="chip small">
+                    {step.insertAfterStopIdx < 0
+                      ? "始発の前"
+                      : `#${step.insertAfterStopIdx} ${masterStops[step.insertAfterStopIdx] ?? ""} の後`}
+                  </span>
+                {/if}
+                <div class="row no-space" onclick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    class="small transparent circle error-text"
+                    onclick={() => PresetService.removeActionStep(preset, idx)}
+                  >
+                    <i>delete</i>
+                  </button>
                 </div>
               </div>
 
-              <div class="space"></div>
-              <p class="bold no-margin">レイヤー番号の更新:</p>
-              <div class="grid">
-                {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
+              {#if isExpanded}
+                <div class="space"></div>
+                <div class="grid">
+                  <div class="s12 m6">
+                    <div class="field label border no-margin">
+                      <input type="text" bind:value={step.label} />
+                      <label>ステップ表示名</label>
+                    </div>
+                  </div>
                   <div class="s12 m6">
                     <Dropdown
                       full={true}
-                      label={`${slot.name} (${slotKey})`}
-                      value={step.setLayers?.[slotKey]}
-                      onchange={(val) =>
-                        PresetService.updateStepLayerValue(step, slotKey, val)}
+                      label="差し込み位置"
+                      bind:value={step.insertAfterStopIdx}
                       options={[
-                        { value: undefined, label: "変更なし (維持)" },
-                        { value: "+1", label: "次の番号へ (+1)" },
-                        { value: null, label: "非表示にする" },
-                        ...Object.keys(slot.items).map((itemNo) => ({
-                          value: Number(itemNo),
-                          label:
-                            slot.linkedToCsvStop && masterStops[Number(itemNo)]
-                              ? `#${itemNo} (${masterStops[Number(itemNo)]})`
-                              : `#${itemNo} に指定`,
+                        { value: -1, label: "始発停留所の前 (運行開始直後)" },
+                        ...masterStops.map((stopName, sIdx) => ({
+                          value: sIdx,
+                          label: `#${sIdx}: ${stopName} の全フェーズ完了後`,
                         })),
                       ]}
                     />
                   </div>
-                {/each}
-              </div>
-            {/if}
-          </article>
-        {/each}
+                  <div class="s12 m6">
+                    <Dropdown
+                      full={true}
+                      label="LCDグループ切替"
+                      bind:value={step.setLcdGroupNo}
+                      options={[
+                        { value: undefined, label: "変更なし" },
+                        ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
+                          value: Number(gNo),
+                          label: `#${gNo}: ${grp.name}`,
+                        })),
+                      ]}
+                    />
+                  </div>
+                  <div class="s12 m6">
+                    <Dropdown
+                      full={true}
+                      label="直接再生する音声 / グループ"
+                      bind:value={step.playAudioId}
+                      options={audioSelectOptions}
+                    />
+                  </div>
+                </div>
+
+                <div class="row wrap-row top-margin">
+                  <span class="small-text bold">鳴らす音声レイヤー:</span>
+                  {#each Object.entries(preset.audioSlots ?? {}) as [slotKey, slot] (slotKey)}
+                    {@const isChecked = (step.playAudioSlots ?? []).includes(slotKey)}
+                    <label class="checkbox">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onchange={(e) => {
+                          step.playAudioSlots = PresetService.toggleKeyInList(
+                            step.playAudioSlots,
+                            slotKey,
+                            e.currentTarget.checked,
+                          );
+                        }}
+                      />
+                      <span>{slot.name}</span>
+                    </label>
+                  {/each}
+                </div>
+              {/if}
+            </article>
+          {/each}
+        </article>
       {/if}
     </div>
 
@@ -1311,17 +1424,18 @@
         {/if}
 
         <div class="space"></div>
-        <p>プレビュー用レイヤー番号切り替え:</p>
-        {#each Object.entries(preset.layerSlots) as [slotKey, slot] (slotKey)}
-          <div class="field label border small">
-            <input
-              type="number"
-              min="0"
-              bind:value={previewLayerIndices[slotKey]}
-            />
-            <label>{slot.name} 番号</label>
-          </div>
-        {/each}
+        {#if masterStops.length > 0}
+          <Dropdown
+            full={true}
+            label="プレビュー中の停留所"
+            value={previewStopIdx}
+            onchange={(idx) => selectPreviewStop(idx)}
+            options={masterStops.map((name, idx) => ({
+              value: idx,
+              label: `#${idx}: ${name}`,
+            }))}
+          />
+        {/if}
       </article>
     </div>
   </div>
@@ -1343,15 +1457,67 @@
     min-width: 0;
   }
 
-  .stop-chip {
-    max-width: 9rem;
+  .number-box {
+    width: 6.5rem;
+  }
+
+  .small-divider {
+    margin: 1rem 0;
+    opacity: 0.2;
+  }
+
+  .stop-table {
+    overflow: visible;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .stop-table th,
+  .stop-table td {
+    min-width: 0;
+    overflow: visible;
+  }
+
+  .stop-col-no {
+    width: 3rem;
+  }
+
+  .stop-col-name {
+    width: 7.5rem;
+  }
+
+  .slot-header {
+    align-items: center;
+    display: flex;
+    gap: 0.25rem;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .slot-header span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .number-box {
-    width: 6.5rem;
+  .stop-name-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .active-row {
+    background-color: rgb(255 255 255 / 8%);
+  }
+
+  .inherited-hint {
+    font-size: 0.7rem;
+    margin-top: 0.15rem;
+    opacity: 0.65;
+    overflow: hidden;
+    padding-left: 0.25rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .step-card {
