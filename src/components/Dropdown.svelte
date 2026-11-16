@@ -24,9 +24,7 @@
   let openUpward = $state(false);
 
   /** 現在選択されている項目の表示ラベル */
-  let selectedLabel = $derived(
-    options.find((o) => o.value === value)?.label ?? String(value ?? ""),
-  );
+  let selectedLabel = $derived(options.find((o) => o.value === value)?.label ?? String(value ?? ""));
 
   // --- Handlers & Methods ---
 
@@ -58,12 +56,7 @@
   {#if label}
     <span class="dropdown-label">{label}</span>
   {/if}
-  <button
-    type="button"
-    class="border dropdown-button"
-    onmouseenter={updateDirection}
-    onfocus={updateDirection}
-  >
+  <button type="button" class="border dropdown-button" onmouseenter={updateDirection} onfocus={updateDirection}>
     <span class="dropdown-sizer">
       <span class="dropdown-text">{selectedLabel}</span>
       {#each options as opt (opt.label)}
@@ -76,10 +69,7 @@
     {#each options as opt (opt.label)}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <li
-        class:active={opt.value === value}
-        onclick={() => selectItem(opt.value)}
-      >
+      <li class:active={opt.value === value} onclick={() => selectItem(opt.value)}>
         {opt.label}
       </li>
     {/each}
