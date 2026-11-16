@@ -11,6 +11,7 @@ import type {
   RoutePreset,
   StartupLoadPayload,
 } from "./types";
+import { PresetService } from "./preset";
 
 /** localStorage に保持する読み込み済みファイルパス一覧のキー */
 const RECENT_PATHS_STORAGE_KEY = "machirun_recent_mchrn_paths";
@@ -357,7 +358,9 @@ export class ArchiveService {
     const timetableCsv = unzipped["timetable.csv"]
       ? strFromU8(unzipped["timetable.csv"])
       : "";
-    const preset: RoutePreset = JSON.parse(presetJson);
+    const preset: RoutePreset = PresetService.ensureMigrated(
+      JSON.parse(presetJson),
+    );
     if (!preset.audioGroups) preset.audioGroups = {};
 
     const imageBlobs: Record<string, Uint8Array> = {};

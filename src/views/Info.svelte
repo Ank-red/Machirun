@@ -110,9 +110,7 @@
           commits: [],
         };
         const isVersionOnly = /^[0-9]+\.[0-9]+\.[0-9]+$/.test(c.subject.trim());
-        const isDevCommit = /^dev(?:\([^)]+\))?\s*[:：]/i.test(
-          c.subject.trim(),
-        );
+        const isDevCommit = /^dev(?:\([^)]+\))?\s*[:：]/i.test(c.subject.trim());
         if (!isVersionOnly && !isDevCommit) {
           current.commits.push(c);
         }
@@ -209,8 +207,7 @@
 
     <h6><i>tv</i> OBS ブラウザソース連携</h6>
     <p class="small-text">
-      OBS Studio
-      の「ブラウザ」ソースに以下のURLを指定すると、車内LCD映像と放送音声が自動的に出力されます。
+      OBS Studio の「ブラウザ」ソースに以下のURLを指定すると、車内LCD映像と放送音声が自動的に出力されます。
     </p>
     <div class="row">
       <code class="padding fill round">{OBS_URL}</code>
@@ -228,7 +225,7 @@
     {#if sections.length === 0}
       <p class="small-text">変更履歴データがありません。</p>
     {:else}
-      {#each sections as sec, idx (sec.version)}
+      {#each sections as sec, idx (`${sec.version}-${idx}`)}
         {#if idx > 0}
           <hr class="small-divider" />
         {/if}

@@ -97,8 +97,14 @@
 
   // --- Derived Timetable & Step Data ---
 
-  /** プリセットにアクションステップが存在するかどうか */
-  let hasPresetActions = $derived(preset.actions.length > 0);
+  /** CSVから抽出されたマスター停留所リスト */
+  let masterStops = $derived(TimetableService.extractMasterStops(timetableCsv));
+
+  /** 停留所データと進行パターンから自動構築された実行用アクションステップ配列 */
+  let effectiveActions = $derived(PresetService.buildEffectiveActions(preset, masterStops));
+
+  /** 実行可能なアクションステップが存在するかどうか */
+  let hasPresetActions = $derived(effectiveActions.length > 0);
 
   /** CSVからパースされた全運行便データ */
   let rawTrips = $derived.by(() => {
@@ -344,11 +350,18 @@
   }
 
   /**
-   * ステップの音声を再生し、OBS（Rustサーバー）側へも再生トリガーを同期する
-   * @param targetId 再生対象の音声IDまたはグループID
+   * 音声スロット配列（および直接指定ID）から音声を再生し、OBS（Rustサーバー）へもトリガーを同期する
+   * @param playAudioSlots 再生する音声スロットキー配列
+   * @param directAudioId 直接指定の音声IDまたはグループID
    */
-  function playStepAudio(targetId?: string): void {
-    const firstFileName = driverAudioPlayer.playFromPreset(preset, audioUrls, targetId);
+  function playStepAudio(playAudioSlots?: string[], directAudioId?: string): void {
+    const firstFileName = driverAudioPlayer.playStepAudios(
+      preset,
+      audioUrls,
+      currentStopIdx,
+      playAudioSlots,
+      directAudioId,
+    );
 
     if (firstFileName) {
       const isStandby = hasPresetActions && currentActionIdx === -1;
@@ -372,11 +385,11 @@
    * @param shouldPlayAudio 音声を再生するかどうか
    */
   function applyStepAt(targetIdx: number, shouldPlayAudio: boolean): void {
-    if (preset.actions.length === 0) return;
+    if (effectiveActions.length === 0) return;
 
     if (targetIdx < 0) {
       currentActionIdx = -1;
-      const initial = PresetService.resolveStateUpTo(preset, -1);
+      const initial = PresetService.resolveStateUpTo(preset, -1, Infinity, effectiveActions);
       currentStopIdx = initial.stopIndex;
       activeLcdGroupNo = initial.lcdGroupNo;
       activeLcdSlideIdx = 0;
@@ -385,11 +398,11 @@
       return;
     }
 
-    const clampedIdx = Math.max(0, Math.min(targetIdx, preset.actions.length - 1));
+    const clampedIdx = Math.max(0, Math.min(targetIdx, effectiveActions.length - 1));
     currentActionIdx = clampedIdx;
 
     const maxStopIdx = Math.max(0, (currentTrip?.stops.length ?? 1) - 1);
-    const resolved = PresetService.resolveStateUpTo(preset, clampedIdx, maxStopIdx);
+    const resolved = PresetService.resolveStateUpTo(preset, clampedIdx, maxStopIdx, effectiveActions);
 
     currentStopIdx = resolved.stopIndex;
     if (activeLcdGroupNo !== resolved.lcdGroupNo) {
@@ -399,7 +412,8 @@
     activeLayerIndices = resolved.layerIndices;
 
     if (shouldPlayAudio) {
-      playStepAudio(preset.actions[clampedIdx]?.playAudioId);
+      const step = effectiveActions[clampedIdx];
+      playStepAudio(step?.playAudioSlots, step?.playAudioId);
     } else {
       driverAudioPlayer.stop();
     }
@@ -410,7 +424,7 @@
    */
   function advanceStep(): void {
     if (!currentTrip || !hasPresetActions) return;
-    if (currentActionIdx < preset.actions.length - 1) {
+    if (currentActionIdx < effectiveActions.length - 1) {
       applyStepAt(currentActionIdx + 1, true);
     }
   }
@@ -593,7 +607,7 @@
         {currentStop}
         {currentStopIdx}
         {currentActionIdx}
-        actions={preset.actions}
+        actions={effectiveActions}
         {now}
         onadvance={advanceStep}
         onretreat={retreatStep}

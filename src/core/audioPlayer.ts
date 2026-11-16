@@ -75,4 +75,32 @@ export class AudioPlayerService {
     this.playUrls(urls);
     return firstFileName;
   }
+
+  /**
+   * ステップや割り込みの音声スロット配列（および直接指定ID）を解決して連続再生する
+   * @param preset 対象のプリセット
+   * @param audioUrls 音声ハッシュIDからObject URLへのマップ
+   * @param stopIndex 現在の停留所インデックス
+   * @param playAudioSlots チェックされた音声スロットキーの配列
+   * @param directAudioId 直接指定の音声IDまたは "group:番号"
+   * @returns 解決された先頭音声ファイル名（OBS同期トリガー用）
+   */
+  playStepAudios(
+    preset: RoutePreset,
+    audioUrls: Record<string, string>,
+    stopIndex: number,
+    playAudioSlots?: string[],
+    directAudioId?: string,
+  ): string {
+    this.stop();
+    const { urls, firstFileName } = PresetService.resolveStepAudios(
+      preset,
+      audioUrls,
+      stopIndex,
+      playAudioSlots,
+      directAudioId,
+    );
+    this.playUrls(urls);
+    return firstFileName;
+  }
 }

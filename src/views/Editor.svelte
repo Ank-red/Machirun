@@ -798,90 +798,92 @@
               「1. 基本・素材」タブでダイヤグラム (timetable.csv) を読み込むと、ここに全停留所の一覧表が表示されます。
             </p>
           {:else}
-            <table class="border stop-table">
-              <thead>
-                <tr>
-                  <th class="stop-col-no">#</th>
-                  <th class="stop-col-name">停留所名</th>
-                  {#each linkedImageSlots as [slotKey, slot] (slotKey)}
-                    <th class="stop-col-slot">
-                      <div class="slot-header">
-                        <i>image</i>
-                        <span>{slot.name}</span>
-                        <code>({slotKey})</code>
-                      </div>
-                    </th>
-                  {/each}
-                  {#each linkedAudioSlots as [slotKey, slot] (slotKey)}
-                    <th class="stop-col-slot">
-                      <div class="slot-header">
-                        <i>volume_up</i>
-                        <span>{slot.name}</span>
-                        <code>({slotKey})</code>
-                      </div>
-                    </th>
-                  {/each}
-                </tr>
-              </thead>
-              <tbody>
-                {#each masterStops as stopName, sIdx (sIdx)}
-                  {@const keyStr = String(sIdx)}
-                  <tr class:active-row={previewStopIdx === sIdx} onclick={() => selectPreviewStop(sIdx)}>
-                    <td class="bold">#{sIdx}</td>
-                    <td class="bold stop-name-cell">{stopName}</td>
-
+            <div class="table-scroll top-margin">
+              <table class="border stop-table">
+                <thead>
+                  <tr>
+                    <th class="stop-col-no">#</th>
+                    <th class="stop-col-name">停留所名</th>
                     {#each linkedImageSlots as [slotKey, slot] (slotKey)}
-                      {@const effectiveHash = PresetService.resolveLayerImageHash(slot, sIdx)}
-                      <td>
-                        <Dropdown
-                          full={true}
-                          value={slot.items[keyStr] ?? ""}
-                          onchange={(val) => {
-                            slot.items[keyStr] = val;
-                            selectPreviewStop(sIdx);
-                          }}
-                          options={tableImageOptions}
-                        />
-                        {#if !slot.items[keyStr] && effectiveHash && preset.images[effectiveHash]}
-                          <div class="inherited-hint">
-                            ↳ {preset.images[effectiveHash].originalName}
-                          </div>
-                        {/if}
-                      </td>
+                      <th class="stop-col-slot">
+                        <div class="slot-header">
+                          <i>image</i>
+                          <span>{slot.name}</span>
+                          <code>({slotKey})</code>
+                        </div>
+                      </th>
                     {/each}
-
                     {#each linkedAudioSlots as [slotKey, slot] (slotKey)}
-                      {@const effectiveAudId = PresetService.resolveAudioSlotTargetId(slot, sIdx)}
-                      <td>
-                        <div class="row item-row no-margin">
+                      <th class="stop-col-slot">
+                        <div class="slot-header">
+                          <i>volume_up</i>
+                          <span>{slot.name}</span>
+                          <code>({slotKey})</code>
+                        </div>
+                      </th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each masterStops as stopName, sIdx (sIdx)}
+                    {@const keyStr = String(sIdx)}
+                    <tr class:active-row={previewStopIdx === sIdx} onclick={() => selectPreviewStop(sIdx)}>
+                      <td class="bold">#{sIdx}</td>
+                      <td class="bold stop-name-cell">{stopName}</td>
+
+                      {#each linkedImageSlots as [slotKey, slot] (slotKey)}
+                        {@const effectiveHash = PresetService.resolveLayerImageHash(slot, sIdx)}
+                        <td>
                           <Dropdown
                             full={true}
                             value={slot.items[keyStr] ?? ""}
                             onchange={(val) => {
                               slot.items[keyStr] = val;
+                              selectPreviewStop(sIdx);
                             }}
-                            options={getTableAudioOptions(slot.inheritPrevious)}
+                            options={tableImageOptions}
                           />
-                          {#if effectiveAudId}
-                            <button
-                              type="button"
-                              class="small transparent circle"
-                              title="この停留所で鳴る音声を試聴"
-                              onclick={(e) => {
-                                e.stopPropagation();
-                                previewPlayer.playFromPreset(preset, audioUrls, effectiveAudId);
-                              }}
-                            >
-                              <i>play_arrow</i>
-                            </button>
+                          {#if !slot.items[keyStr] && effectiveHash && preset.images[effectiveHash]}
+                            <div class="inherited-hint">
+                              ↳ {preset.images[effectiveHash].originalName}
+                            </div>
                           {/if}
-                        </div>
-                      </td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
+                        </td>
+                      {/each}
+
+                      {#each linkedAudioSlots as [slotKey, slot] (slotKey)}
+                        {@const effectiveAudId = PresetService.resolveAudioSlotTargetId(slot, sIdx)}
+                        <td>
+                          <div class="row item-row no-margin">
+                            <Dropdown
+                              full={true}
+                              value={slot.items[keyStr] ?? ""}
+                              onchange={(val) => {
+                                slot.items[keyStr] = val;
+                              }}
+                              options={getTableAudioOptions(slot.inheritPrevious)}
+                            />
+                            {#if effectiveAudId}
+                              <button
+                                type="button"
+                                class="small transparent circle"
+                                title="この停留所で鳴る音声を試聴"
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  previewPlayer.playFromPreset(preset, audioUrls, effectiveAudId);
+                                }}
+                              >
+                                <i>play_arrow</i>
+                              </button>
+                            {/if}
+                          </div>
+                        </td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           {/if}
         </article>
 
@@ -1474,24 +1476,28 @@
     opacity: 0.2;
   }
 
-  .stop-table {
-    overflow: visible;
-    table-layout: fixed;
+  .table-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
     width: 100%;
   }
 
-  .stop-table th,
-  .stop-table td {
-    min-width: 0;
-    overflow: visible;
+  .stop-table {
+    min-width: 100%;
+    table-layout: fixed;
+    width: max-content;
   }
 
   .stop-col-no {
-    width: 3rem;
+    width: 3.5rem;
   }
 
   .stop-col-name {
-    width: 7.5rem;
+    width: 8.5rem;
+  }
+
+  .stop-col-slot {
+    width: 14rem;
   }
 
   .slot-header {
