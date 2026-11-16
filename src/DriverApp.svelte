@@ -97,8 +97,14 @@
 
   // --- Derived Timetable & Step Data ---
 
-  /** プリセットにアクションステップが存在するかどうか */
-  let hasPresetActions = $derived(preset.actions.length > 0);
+  /** CSVから抽出されたマスター停留所リスト */
+  let masterStops = $derived(TimetableService.extractMasterStops(timetableCsv));
+
+  /** 停留所データと進行パターンから自動構築された実行用アクションステップ配列 */
+  let effectiveActions = $derived(PresetService.buildEffectiveActions(preset, masterStops));
+
+  /** 実行可能なアクションステップが存在するかどうか */
+  let hasPresetActions = $derived(effectiveActions.length > 0);
 
   /** CSVからパースされた全運行便データ */
   let rawTrips = $derived.by(() => {
@@ -593,7 +599,7 @@
         {currentStop}
         {currentStopIdx}
         {currentActionIdx}
-        actions={preset.actions}
+        actions={effectiveActions}
         {now}
         onadvance={advanceStep}
         onretreat={retreatStep}
