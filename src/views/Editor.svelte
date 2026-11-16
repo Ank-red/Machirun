@@ -256,6 +256,7 @@
         imageBlobs,
         imageUrls,
       );
+      await LcdSyncService.registerImageBlobs(imageBlobs);
     } finally {
       isRegisteringImage = false;
     }
@@ -277,6 +278,7 @@
         imageBlobs,
         imageUrls,
       );
+      await LcdSyncService.registerImageBlobs(imageBlobs);
     } finally {
       isRegisteringImage = false;
     }
@@ -459,6 +461,24 @@
     if (!group) return;
     group.slides.push({ baseImageId: "", durationSec: 6, visibleLayers: [] });
     previewSlideIdx = group.slides.length - 1;
+  }
+
+  /**
+   * 特定停留所・特定フェーズのLCDグループ上書き設定を更新する
+   * @param stopIdx 停留所インデックス
+   * @param phaseId フェーズID
+   * @param groupNo 上書きするLCDグループ番号（undefinedで解除）
+   */
+  function setStopPhaseLcdOverride(stopIdx: number, phaseId: string, groupNo: number | undefined): void {
+    if (!preset.stopLcdOverrides) preset.stopLcdOverrides = {};
+    const key = String(stopIdx);
+    if (!preset.stopLcdOverrides[key]) preset.stopLcdOverrides[key] = {};
+
+    if (groupNo === undefined) {
+      delete preset.stopLcdOverrides[key][phaseId];
+    } else {
+      preset.stopLcdOverrides[key][phaseId] = groupNo;
+    }
   }
 
   /**
@@ -822,6 +842,14 @@
                         </div>
                       </th>
                     {/each}
+                    {#each preset.progressionPhases as phase (phase.id)}
+                      <th class="stop-col-slot">
+                        <div class="slot-header">
+                          <i>tv</i>
+                          <span>LCD: {phase.label}</span>
+                        </div>
+                      </th>
+                    {/each}
                   </tr>
                 </thead>
                 <tbody>
@@ -877,6 +905,35 @@
                               </button>
                             {/if}
                           </div>
+                        </td>
+                      {/each}
+                      {#each preset.progressionPhases as phase (phase.id)}
+                        {@const overrideNo = preset.stopLcdOverrides?.[keyStr]?.[phase.id]}
+                        <td>
+                          <Dropdown
+                            full={true}
+                            value={overrideNo}
+                            onchange={(val) => {
+                              setStopPhaseLcdOverride(sIdx, phase.id, val);
+                              if (val !== undefined) {
+                                previewGroupNo = String(val);
+                                previewSlideIdx = 0;
+                              }
+                            }}
+                            options={[
+                              {
+                                value: undefined,
+                                label:
+                                  phase.lcdGroupNo !== undefined
+                                    ? `── (基本: #${phase.lcdGroupNo})`
+                                    : "── (基本: 切替なし)",
+                              },
+                              ...Object.entries(preset.lcdGroups).map(([gNo, grp]) => ({
+                                value: Number(gNo),
+                                label: `#${gNo}: ${grp.name}`,
+                              })),
+                            ]}
+                          />
                         </td>
                       {/each}
                     </tr>

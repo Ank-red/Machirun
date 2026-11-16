@@ -113,6 +113,7 @@ export class PresetService {
           ],
         },
       },
+      stopLcdOverrides: {},
       progressionPhases: this.createPhaseTemplate("3-step"),
       actions: [],
       interrupts: [],
@@ -134,6 +135,7 @@ export class PresetService {
       audioGroups: raw.audioGroups ?? {},
       audioSlots: raw.audioSlots ?? defaults.audioSlots,
       lcdGroups: raw.lcdGroups ?? defaults.lcdGroups,
+      stopLcdOverrides: raw.stopLcdOverrides ?? {},
       progressionPhases:
         raw.progressionPhases && raw.progressionPhases.length > 0
           ? raw.progressionPhases
@@ -193,7 +195,7 @@ export class PresetService {
       return "";
     }
 
-    if (!slot.linkedToCsvStop) {
+    if (slot.linkedToCsvStop === false) {
       return slot.items[String(activeIdx)] || slot.defaultItemId || "";
     }
 
@@ -216,17 +218,13 @@ export class PresetService {
     preset: RoutePreset,
     masterStops: string[],
   ): ActionStep[] {
-    const hasLegacyManualSteps =
-      preset.actions.length > 0 &&
-      preset.actions.every((a) => a.insertAfterStopIdx === undefined);
-
-    if (masterStops.length === 0 || hasLegacyManualSteps) {
+    if (masterStops.length === 0) {
       return preset.actions;
     }
 
     const result: ActionStep[] = [];
     const linkedLayerKeys = Object.entries(preset.layerSlots)
-      .filter(([, slot]) => slot.linkedToCsvStop)
+      .filter(([, slot]) => slot.linkedToCsvStop !== false)
       .map(([key]) => key);
 
     const pushExceptionsFor = (stopIdx: number): void => {
@@ -263,11 +261,14 @@ export class PresetService {
           }
         }
 
+        const overrideLcd =
+          preset.stopLcdOverrides?.[String(sIdx)]?.[phase.id];
+
         result.push({
           stepNo: result.length + 1,
           label: `${stopName} - ${phase.label}`,
           setStopIndex: isFirstPhaseOfStop ? sIdx : undefined,
-          setLcdGroupNo: phase.lcdGroupNo,
+          setLcdGroupNo: overrideLcd ?? phase.lcdGroupNo,
           setLayers: isFirstPhaseOfStop ? setLayers : undefined,
           playAudioSlots: [...phase.playAudioSlots],
         });
@@ -423,9 +424,9 @@ export class PresetService {
     stopIndex: number,
     playAudioSlots?: string[],
     directAudioId?: string,
-  ): { urls: string[]; firstFileName: string } {
+  ): { urls: string[]; fileNames: string[]; firstFileName: string } {
     const allUrls: string[] = [];
-    let firstFileName = "";
+    const allFileNames: string[] = [];
 
     for (const slotKey of playAudioSlots ?? []) {
       const slot = preset.audioSlots?.[slotKey];
@@ -434,20 +435,20 @@ export class PresetService {
 
       const seq = this.resolveAudioSequence(preset, audioUrls, targetId);
       allUrls.push(...seq.urls);
-      if (!firstFileName && seq.firstFileName) {
-        firstFileName = seq.firstFileName;
-      }
+      allFileNames.push(...seq.fileNames);
     }
 
     if (directAudioId) {
       const seq = this.resolveAudioSequence(preset, audioUrls, directAudioId);
       allUrls.push(...seq.urls);
-      if (!firstFileName && seq.firstFileName) {
-        firstFileName = seq.firstFileName;
-      }
+      allFileNames.push(...seq.fileNames);
     }
 
-    return { urls: allUrls, firstFileName };
+    return {
+      urls: allUrls,
+      fileNames: allFileNames,
+      firstFileName: allFileNames[0] ?? "",
+    };
   }
 
   /**

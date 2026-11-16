@@ -54,12 +54,51 @@ const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
   <audio id="obs-audio" style="display:none;"></audio>
 
   <script>
-    const objectUrlCache = {};
+    const audioUrlCache = {};
     let lastAudioNonce = 0;
+    let audioPlayToken = 0;
+
+    async function getAudioBlobUrl(fileName) {
+      if (audioUrlCache[fileName]) return audioUrlCache[fileName];
+      const res = await fetch(`/audio/${encodeURIComponent(fileName)}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = await res.arrayBuffer();
+      const blob = new Blob([buf], { type: 'audio/ogg; codecs=opus' });
+      const url = URL.createObjectURL(blob);
+      audioUrlCache[fileName] = url;
+      return url;
+    }
+
+    async function playObsAudioQueue(files, token) {
+      const audioElement = document.getElementById('obs-audio');
+      audioElement.pause();
+
+      // 全ファイルを並列で事前取得してBlob URL化
+      const urlPromises = files.map(f => getAudioBlobUrl(f).catch(e => {
+        console.error("Audio fetch error:", f, e);
+        return null;
+      }));
+
+      for (const p of urlPromises) {
+        if (token !== audioPlayToken) return;
+        const blobUrl = await p;
+        if (!blobUrl || token !== audioPlayToken) continue;
+
+        await new Promise((resolve) => {
+          audioElement.onended = resolve;
+          audioElement.onerror = resolve;
+          audioElement.src = blobUrl;
+          audioElement.play().catch(e => {
+            console.error("Audio playback failed:", e);
+            resolve();
+          });
+        });
+      }
+    }
 
     async function updateLcd() {
       try {
-        const res = await fetch('/api/state');
+        const res = await fetch('/api/state', { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
 
@@ -74,22 +113,15 @@ const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
         const groupNo = data.group_no || "1";
         const slideIdx = data.slide_idx || 0;
         const layerIndices = data.layer_indices || {};
-        const imageBlobs = data.image_blobs || {};
-        const playingFile = data.playing_audio_file;
+        const playingFiles = (data.playing_audio_files && data.playing_audio_files.length > 0)
+          ? data.playing_audio_files
+          : (data.playing_audio_file ? [data.playing_audio_file] : []);
         const nonce = data.audio_nonce || 0;
 
-        for (const [filename, byteArr] of Object.entries(imageBlobs)) {
-          if (!objectUrlCache[filename]) {
-            const blob = new Blob([new Uint8Array(byteArr)], { type: 'image/avif' });
-            objectUrlCache[filename] = URL.createObjectURL(blob);
-          }
-        }
-
-        if (playingFile && nonce !== lastAudioNonce) {
+        if (playingFiles.length > 0 && nonce !== lastAudioNonce) {
           lastAudioNonce = nonce;
-          const audioElement = document.getElementById('obs-audio');
-          audioElement.src = `/audio/${encodeURIComponent(playingFile)}?t=${nonce}`;
-          audioElement.play().catch(e => console.error("Audio playback failed:", e));
+          const currentToken = ++audioPlayToken;
+          playObsAudioQueue(playingFiles, currentToken);
         }
 
         const group = preset.lcdGroups[groupNo];
@@ -102,8 +134,7 @@ const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
 
         if (slide.baseImageId && preset.images?.[slide.baseImageId]) {
           const imgAsset = preset.images[slide.baseImageId];
-          const url = objectUrlCache[imgAsset.fileName];
-          if (url) html += `<img src="${url}" class="lcd-layer" />`;
+          html += `<img src="/image/${encodeURIComponent(imgAsset.fileName)}" class="lcd-layer" />`;
         }
 
         if (slide.visibleLayers && preset.layerSlots) {
@@ -115,22 +146,36 @@ const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
             const activeIdx = overrideIdx !== undefined ? overrideIdx : layerIndices[slotKey];
             if (activeIdx === null || activeIdx === undefined || activeIdx === "+1") continue;
 
-            const hashId = slot.items[String(activeIdx)];
+            let hashId = "";
+            if (slot.linkedToCsvStop === false) {
+              hashId = slot.items[String(activeIdx)] || slot.defaultItemId || "";
+            } else {
+              for (let i = Number(activeIdx); i >= 0; i--) {
+                if (slot.items[String(i)]) {
+                  hashId = slot.items[String(i)];
+                  break;
+                }
+              }
+              if (!hashId) hashId = slot.defaultItemId || "";
+            }
+
             if (hashId && preset.images?.[hashId]) {
               const layerAsset = preset.images[hashId];
-              const url = objectUrlCache[layerAsset.fileName];
-              if (url) html += `<img src="${url}" class="lcd-layer" />`;
+              html += `<img src="/image/${encodeURIComponent(layerAsset.fileName)}" class="lcd-layer" />`;
             }
           }
         }
 
-        stage.innerHTML = html;
+        if (stage.dataset.lastHtml !== html) {
+          stage.innerHTML = html;
+          stage.dataset.lastHtml = html;
+        }
       } catch (e) {
         console.error("LCD Sync Error:", e);
       }
     }
 
-    setInterval(updateLcd, 100);
+    setInterval(updateLcd, 150);
     updateLcd();
   </script>
 </body>
@@ -143,8 +188,9 @@ struct LcdServerState {
     group_no: String,
     slide_idx: usize,
     layer_indices: HashMap<String, serde_json::Value>,
-    image_blobs: HashMap<String, Vec<u8>>,
     playing_audio_file: String,
+    #[serde(default)]
+    playing_audio_files: Vec<String>,
     audio_nonce: u64,
 }
 
@@ -152,6 +198,9 @@ lazy_static! {
     /// フロントエンドから同期された最新のLCD表示状態
     static ref LCD_STATE: Arc<Mutex<LcdServerState>> =
         Arc::new(Mutex::new(LcdServerState::default()));
+    /// フロントエンドから登録された画像バイナリのキャッシュ
+    static ref IMAGE_BLOBS_CACHE: Arc<Mutex<HashMap<String, Vec<u8>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     /// フロントエンドから登録された音声バイナリのキャッシュ
     static ref AUDIO_BLOBS_CACHE: Arc<Mutex<HashMap<String, Vec<u8>>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -162,6 +211,14 @@ lazy_static! {
 fn sync_lcd_to_rust(state: LcdServerState) {
     if let Ok(mut locked) = LCD_STATE.lock() {
         *locked = state;
+    }
+}
+
+/// 画像バイナリ一式をRust側のメモリキャッシュへ登録するTauriコマンド
+#[tauri::command]
+fn register_image_blobs(blobs: HashMap<String, Vec<u8>>) {
+    if let Ok(mut locked) = IMAGE_BLOBS_CACHE.lock() {
+        *locked = blobs;
     }
 }
 
@@ -324,11 +381,18 @@ async fn confirm_unsaved_dialog(message: String) -> bool {
         == rfd::MessageDialogResult::Yes
 }
 
-/// CORSヘッダーとContent-Typeを付与したHTTPレスポンスを生成する
+/// CORSヘッダーとContent-Typeおよびキャッシュ無効化を付与したHTTPレスポンスを生成する
 fn build_response(data: Vec<u8>, content_type: &[u8]) -> Response<Cursor<Vec<u8>>> {
     Response::from_data(data)
         .with_header(Header::from_bytes(&b"Content-Type"[..], content_type).unwrap())
         .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+        .with_header(
+            Header::from_bytes(
+                &b"Cache-Control"[..],
+                &b"no-store, no-cache, must-revalidate"[..],
+            )
+            .unwrap(),
+        )
 }
 
 /// OBSブラウザソース向けのローカルHTTPサーバー (`127.0.0.1:14280`) を別スレッドで起動する
@@ -343,33 +407,43 @@ fn spawn_lcd_http_server() {
         };
 
         for request in server.incoming_requests() {
-            let url = request.url().to_string();
-            let clean_path = url.split('?').next().unwrap_or("");
+            thread::spawn(move || {
+                let url = request.url().to_string();
+                let clean_path = url.split('?').next().unwrap_or("");
 
-            if clean_path == "/api/state" {
-                let locked = LCD_STATE.lock().unwrap();
-                let json = serde_json::to_vec(&*locked).unwrap_or_else(|_| b"{}".to_vec());
-                let _ = request.respond(build_response(json, b"application/json"));
-            } else if let Some(filename) = clean_path.strip_prefix("/image/") {
-                let locked = LCD_STATE.lock().unwrap();
-                if let Some(bytes) = locked.image_blobs.get(filename) {
-                    let _ = request.respond(build_response(bytes.clone(), b"image/avif"));
+                if clean_path == "/api/state" {
+                    let json = {
+                        let locked = LCD_STATE.lock().unwrap();
+                        serde_json::to_vec(&*locked).unwrap_or_else(|_| b"{}".to_vec())
+                    };
+                    let _ = request.respond(build_response(json, b"application/json"));
+                } else if let Some(filename) = clean_path.strip_prefix("/image/") {
+                    let bytes_opt = {
+                        let locked = IMAGE_BLOBS_CACHE.lock().unwrap();
+                        locked.get(filename).cloned()
+                    };
+                    if let Some(bytes) = bytes_opt {
+                        let _ = request.respond(build_response(bytes, b"image/avif"));
+                    } else {
+                        let _ = request.respond(Response::empty(404));
+                    }
+                } else if let Some(filename) = clean_path.strip_prefix("/audio/") {
+                    let bytes_opt = {
+                        let locked = AUDIO_BLOBS_CACHE.lock().unwrap();
+                        locked.get(filename).cloned()
+                    };
+                    if let Some(bytes) = bytes_opt {
+                        let _ = request.respond(build_response(bytes, b"audio/ogg"));
+                    } else {
+                        let _ = request.respond(Response::empty(404));
+                    }
                 } else {
-                    let _ = request.respond(Response::empty(404));
+                    let _ = request.respond(build_response(
+                        OBS_LCD_HTML.as_bytes().to_vec(),
+                        b"text/html; charset=utf-8",
+                    ));
                 }
-            } else if let Some(filename) = clean_path.strip_prefix("/audio/") {
-                let locked = AUDIO_BLOBS_CACHE.lock().unwrap();
-                if let Some(bytes) = locked.get(filename) {
-                    let _ = request.respond(build_response(bytes.clone(), b"audio/ogg"));
-                } else {
-                    let _ = request.respond(Response::empty(404));
-                }
-            } else {
-                let _ = request.respond(build_response(
-                    OBS_LCD_HTML.as_bytes().to_vec(),
-                    b"text/html; charset=utf-8",
-                ));
-            }
+            });
         }
     });
 }
@@ -438,6 +512,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             sync_lcd_to_rust,
+            register_image_blobs,
             register_audio_blobs,
             save_mchrn_file,
             open_mchrn_files_dialog,

@@ -74,6 +74,8 @@
   /** OBS側で再生トリガーをかける先頭音声ファイル名 */
   let currentPlayingAudioFile = $state<string>("");
 
+  let currentPlayingAudioFiles = $state<string[]>([]);
+
   /** OBS側の音声再生トリガー用カウンタ */
   let audioNonce = $state<number>(0);
 
@@ -355,7 +357,7 @@
    * @param directAudioId 直接指定の音声IDまたはグループID
    */
   function playStepAudio(playAudioSlots?: string[], directAudioId?: string): void {
-    const firstFileName = driverAudioPlayer.playStepAudios(
+    const fileNames = driverAudioPlayer.playStepAudios(
       preset,
       audioUrls,
       currentStopIdx,
@@ -363,9 +365,10 @@
       directAudioId,
     );
 
-    if (firstFileName) {
+    if (fileNames.length > 0) {
       const isStandby = hasPresetActions && currentActionIdx === -1;
-      currentPlayingAudioFile = firstFileName;
+      currentPlayingAudioFile = fileNames[0];
+      currentPlayingAudioFiles = fileNames;
       audioNonce++;
       LcdSyncService.syncState({
         preset: isStandby ? null : preset,
@@ -374,6 +377,7 @@
         layerIndices: activeLayerIndices,
         imageBlobs: isStandby ? {} : imageBlobs,
         playingAudioFile: isStandby ? "" : currentPlayingAudioFile,
+        playingAudioFiles: isStandby ? [] : currentPlayingAudioFiles,
         audioNonce: isStandby ? 0 : audioNonce,
       });
     }
@@ -441,6 +445,11 @@
 
   // --- Effects & Lifecycle ---
 
+  /** アクティブなプリセットの画像バイナリが変わったらRust側へ登録 */
+  $effect(() => {
+    LcdSyncService.registerImageBlobs(imageBlobs);
+  });
+
   /** アクティブなプリセットの音声バイナリが変わったらRust側へ登録 */
   $effect(() => {
     LcdSyncService.registerAudioBlobs(audioBlobs);
@@ -479,6 +488,7 @@
       layerIndices: activeLayerIndices,
       imageBlobs: isStandby ? {} : imageBlobs,
       playingAudioFile: isStandby ? "" : currentPlayingAudioFile,
+      playingAudioFiles: isStandby ? [] : currentPlayingAudioFiles,
       audioNonce: isStandby ? 0 : audioNonce,
     });
   });

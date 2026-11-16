@@ -141,6 +141,8 @@ export interface RoutePreset {
   audioGroups?: Record<string, AudioGroup>;
   audioSlots: Record<string, AudioSlot>;
   lcdGroups: Record<string, LcdGroup>;
+  /** 停留所インデックス -> (フェーズID -> 上書きするLCDグループ番号) のマップ */
+  stopLcdOverrides?: Record<string, Record<string, number>>;
   /** 共通の進行フェーズ定義配列 */
   progressionPhases: ProgressionPhase[];
   /** 例外差し込みアクションステップ配列（旧プリセット読込時はレガシーステップを保持） */
@@ -229,6 +231,7 @@ export interface LcdSyncPayload {
   layerIndices: Record<string, LayerOperationValue>;
   imageBlobs: Record<string, Uint8Array>;
   playingAudioFile?: string;
+  playingAudioFiles?: string[];
   audioNonce?: number;
 }
 

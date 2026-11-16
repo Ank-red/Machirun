@@ -15,6 +15,27 @@ export const lcdChannel = new BroadcastChannel(LCD_BROADCAST_CHANNEL_NAME);
  */
 export class LcdSyncService {
   /**
+   * 画像バイナリ一式をRust側のキャッシュへ登録する
+   * @param imageBlobs ファイル名からAVIFバイナリへのマップ
+   */
+  static async registerImageBlobs(
+    imageBlobs: Record<string, Uint8Array>,
+  ): Promise<void> {
+    if (!IS_TAURI) return;
+
+    const blobs: Record<string, number[]> = {};
+    for (const [name, bytes] of Object.entries(imageBlobs)) {
+      blobs[name] = Array.from(bytes);
+    }
+
+    try {
+      await invoke("register_image_blobs", { blobs });
+    } catch (err) {
+      console.error("Failed to register image blobs:", err);
+    }
+  }
+
+  /**
    * 音声バイナリ一式をRust側のキャッシュへ登録する
    * @param audioBlobs ファイル名からOpusバイナリへのマップ
    */
@@ -42,11 +63,6 @@ export class LcdSyncService {
   static async syncState(payload: LcdSyncPayload): Promise<void> {
     if (!IS_TAURI) return;
 
-    const plainImageBlobs: Record<string, number[]> = {};
-    for (const [name, bytes] of Object.entries(payload.imageBlobs)) {
-      plainImageBlobs[name] = Array.from(bytes);
-    }
-
     try {
       await invoke("sync_lcd_to_rust", {
         state: {
@@ -56,8 +72,8 @@ export class LcdSyncService {
           group_no: String(payload.groupNo),
           slide_idx: Number(payload.slideIdx),
           layer_indices: JSON.parse(JSON.stringify(payload.layerIndices)),
-          image_blobs: plainImageBlobs,
           playing_audio_file: payload.playingAudioFile ?? "",
+          playing_audio_files: payload.playingAudioFiles ?? [],
           audio_nonce: payload.audioNonce ?? 0,
         },
       });

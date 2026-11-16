@@ -91,9 +91,9 @@ export class AudioPlayerService {
     stopIndex: number,
     playAudioSlots?: string[],
     directAudioId?: string,
-  ): string {
+  ): string[] {
     this.stop();
-    const { urls, firstFileName } = PresetService.resolveStepAudios(
+    const { urls, fileNames } = PresetService.resolveStepAudios(
       preset,
       audioUrls,
       stopIndex,
@@ -101,6 +101,6 @@ export class AudioPlayerService {
       directAudioId,
     );
     this.playUrls(urls);
-    return firstFileName;
+    return fileNames;
   }
 }
