@@ -71,6 +71,8 @@ export default defineConfig(() => {
     APP_REPOSITORY_URL: packageJson.repository?.url || "",
   };
 
+  const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
+
   return {
     define: {
       __APP_TITLE__: JSON.stringify(appMeta.APP_TITLE),
@@ -100,8 +102,11 @@ export default defineConfig(() => {
       emptyOutDir: true,
       rollupOptions: {
         input: {
-          driver: resolve(import.meta.dirname, "driver.html"),
+          ...(isTauriBuild
+            ? { driver: resolve(import.meta.dirname, "driver.html") }
+            : {}),
           passenger: resolve(import.meta.dirname, "index.html"),
+          download: resolve(import.meta.dirname, "download.html"),
         },
         output: {
           entryFileNames: "assets/[name].[hash].js",
