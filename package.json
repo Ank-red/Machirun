@@ -29,7 +29,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json --tsgo && tsc --noEmit",
     "lint": "bun run lint:code && bun run lint:style",
     "lint:code": "biome lint src vite.config.ts contextCode.ts",
-    "lint:style": "stylelint \"src/**/*.{css,scss,svelte}\" \"src/**/*.{css,scss,svelte}\" --fix",
+    "lint:style": "stylelint \"src/**/*.{css,scss,svelte}\" --fix",
     "context": "bun run contextCode.ts",
     "release:patch": "bun run release.ts patch",
     "release:minor": "bun run release.ts minor",
