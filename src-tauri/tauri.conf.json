@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Machirun Driver",
   "mainBinaryName": "machirun",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "identifier": "city.machibayashi.machirun",
   "build": {
     "frontendDist": "../dist",
@@ -53,15 +53,15 @@
     "linux": {
       "appimage": {
         "bundleMediaFramework": false,
-        "files": { }
+        "files": {}
       },
       "deb": {
-        "files": { },
+        "files": {},
         "desktopTemplate": "linux/machirun.desktop"
       },
       "rpm": {
         "epoch": 0,
-        "files": { },
+        "files": {},
         "release": "1",
         "desktopTemplate": "linux/machirun.desktop"
       }
