@@ -25,6 +25,20 @@
     href="https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&family=Noto+Sans+JP:wght@100..900&display=swap">
   <!-- TITLE -->
   <title>{APP_TITLE} Driver - {APP_VERSION}</title>
+  <script>
+    // すでに登録されているService Workerをすべて取得して解除する
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (registrations) {
+        for (let i = 0; i < registrations.length; i++) {
+          registrations[i].unregister().then(function (boolean) {
+            if (boolean) {
+              console.log('Service Workerの解除に成功しました');
+            }
+          });
+        }
+      });
+    }
+  </script>
 </head>
 
 <body class="dark">
