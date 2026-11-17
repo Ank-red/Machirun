@@ -545,12 +545,12 @@
     window.addEventListener("keydown", handleKeyDown);
 
     if (!IS_TAURI) {
-      // 起動時にバックグラウンドでアップデートを確認
-      UpdaterService.checkForUpdates().then((info) => {
-        availableUpdate = info;
-      });
       return () => window.removeEventListener("keydown", handleKeyDown);
     }
+    // 起動時にバックグラウンドでアップデートを確認
+    UpdaterService.checkForUpdates().then((info) => {
+      availableUpdate = info;
+    });
 
     // 前回読み込んだ .mchrn パス一覧の自動復元
     const recentPaths = ArchiveService.loadRecentPaths();
