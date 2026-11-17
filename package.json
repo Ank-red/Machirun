@@ -37,6 +37,8 @@
   },
   "dependencies": {
     "@jsquash/avif": "^2.1.1",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "beercss": "^5.0.3",
     "fflate": "^0.8.3",
     "material-dynamic-colors": "^1.2.0",

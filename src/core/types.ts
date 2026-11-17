@@ -252,3 +252,11 @@ export interface ReleaseDownloadUrls {
   deb: string;
   appImage: string;
 }
+
+/** 利用可能なアプリケーション更新情報 */
+export interface AvailableUpdateInfo {
+  /** 新しいバージョン番号 */
+  version: string;
+  /** リリースノート（本文） */
+  body: string;
+}

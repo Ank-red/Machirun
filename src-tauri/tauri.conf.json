@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis",
       "deb",
@@ -52,21 +53,32 @@
     "linux": {
       "appimage": {
         "bundleMediaFramework": false,
-        "files": {}
+        "files": { }
       },
       "deb": {
-        "files": {},
+        "files": { },
         "desktopTemplate": "linux/machirun.desktop"
       },
       "rpm": {
         "epoch": 0,
-        "files": {},
+        "files": { },
         "release": "1",
         "desktopTemplate": "linux/machirun.desktop"
       }
     },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFGN0JBMkU1ODQ2MDJEMDYKUldRR0xXQ0U1YUo3cjZsRThjZ2Jzd1RnZENaakhmTHQ5cFdnOTdZek84TXZ1aUw5cGRheWx0bDcK",
+      "endpoints": [
+        "https://github.com/Ank-red/Machirun/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
