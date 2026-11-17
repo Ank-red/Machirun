@@ -1,10 +1,14 @@
 import { $ } from "bun";
 
-type BumpType = "major" | "minor" | "patch";
+type BumpType = "major" | "minor" | "patch" | "release" | "pre-release";
 
 const bumpType = process.argv[2] as BumpType;
-if (!["major", "minor", "patch"].includes(bumpType)) {
-  console.error("使い方: bun run release.ts <major | minor | patch>");
+if (["major", "minor", "patch"].includes(bumpType)) {
+  runVersionUp();
+} else if (["release", "pre-release"].includes(bumpType)) {
+  runRelease();
+} else {
+  console.error("使い方: bun run release.ts <major | minor | patch | release | pre-release>");
   process.exit(1);
 }
 
@@ -16,6 +20,15 @@ function incrementVersion(version: string, type: BumpType): string {
 }
 
 async function runRelease() {
+  const pkgFile = Bun.file("package.json");
+  const pkg = await pkgFile.json();
+  const version: string = pkg.version;
+  const tagName = `${bumpType}-v${version}`;
+  await $`git tag ${tagName}`;
+  await $`git push origin ${tagName}`;
+}
+
+async function runVersionUp() {
   const pkgFile = Bun.file("package.json");
   const pkg = await pkgFile.json();
   const oldVersion: string = pkg.version;
@@ -68,7 +81,5 @@ async function runRelease() {
   await $`git push origin ${tagName}`;
   await $`bun run context`;
 
-  console.log(`✅ リリース完了: v${newVersion} の更新とプッシュが完了しました！`);
+  console.log(`✅ バージョンアップ完了: v${newVersion} の更新とプッシュが完了しました！`);
 }
-
-runRelease();
