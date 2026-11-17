@@ -9,7 +9,7 @@ on:
         type: string
   push:
     tags:
-      - "release-v*"
+      - "v*"
 
 permissions:
   contents: write

@@ -23,7 +23,7 @@ async function runRelease() {
   const pkgFile = Bun.file("package.json");
   const pkg = await pkgFile.json();
   const version: string = pkg.version;
-  const tagName = `${bumpType}-v${version}`;
+  const tagName = (bumpType === "pre-release") ? `v${version}-pre` : `v${version}`;
   await $`git tag ${tagName}`;
   await $`git push origin ${tagName}`;
 }
@@ -73,12 +73,9 @@ async function runVersionUp() {
   await $`cargo update -p app --manifest-path ${cargoPath}`;
 
   // 5. Git コミット・タグ付与・プッシュ
-  const tagName = `v${newVersion}`;
   await $`git add package.json ${tauriConfPath} ${cargoPath} ${cargoLockPath}`;
   await $`git commit -m ${newVersion}`;
-  await $`git tag ${tagName}`;
   await $`git push origin HEAD`;
-  await $`git push origin ${tagName}`;
   await $`bun run context`;
 
   console.log(`✅ バージョンアップ完了: v${newVersion} の更新とプッシュが完了しました！`);
