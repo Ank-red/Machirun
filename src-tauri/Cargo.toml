@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.4.6"
+version = "1.0.0"
 description = "町林市バスアプリ"
 authors = ["ANKRED"]
 license = ""
