@@ -1534,8 +1534,7 @@
   }
 
   .table-scroll {
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: auto hidden;
     width: 100%;
   }
 

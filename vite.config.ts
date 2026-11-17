@@ -33,7 +33,8 @@ function getGitChangelog(): CommitEntry[] {
         const tagMatch = refs?.match(
           /tag:\s*(?:app-v|v)?([0-9]+\.[0-9]+\.[0-9]+)/,
         );
-        const isVersionCommit = /^[0-9]+\.[0-9]+\.[0-9]+$/.test(subject.trim());
+        let isVersionCommit = /^[0-9]+\.[0-9]+\.[0-9]+$/.test(subject.trim());
+        if (/^0.4.*/i.test(subject.trim())) isVersionCommit = false;
 
         return {
           hash,
@@ -47,7 +48,10 @@ function getGitChangelog(): CommitEntry[] {
         const isDevCommit = /^dev(?:\([^)]+\))?\s*[:：]/i.test(
           entry.subject.trim(),
         );
-        return !(isDevCommit && !entry.versionTag);
+        const isBetaCommit = /^0.4.*/i.test(
+          entry.subject.trim(),
+        );
+        return !(isDevCommit || isBetaCommit && !entry.versionTag);
       });
   } catch {
     return [];

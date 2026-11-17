@@ -1,7 +1,23 @@
 <script lang="ts">
   // --- Imports ---
 
-  import type { CommitEntry } from "../core/types";
+  import { IS_TAURI } from "../core/lcdSync";
+  import type { AvailableUpdateInfo, CommitEntry } from "../core/types";
+  import { UpdaterService } from "../core/updater";
+
+  // --- Props ---
+
+  let {
+    availableUpdate = $bindable<AvailableUpdateInfo | null>(null),
+    isUpdating = false,
+    updateProgress = 0,
+    onupdate,
+  }: {
+    availableUpdate?: AvailableUpdateInfo | null;
+    isUpdating?: boolean;
+    updateProgress?: number;
+    onupdate?: () => void;
+  } = $props();
 
   // --- Types ---
 
@@ -85,6 +101,12 @@
   /** OBS URLのクリップボードコピー完了フラグ */
   let copied = $state(false);
 
+  /** アップデート手動確認中フラグ */
+  let isCheckingUpdate = $state(false);
+
+  /** アップデート確認結果のステータスメッセージ */
+  let updateStatusMessage = $state("");
+
   /** バージョンごとにグループ化・カテゴリ分類された変更履歴セクション配列 */
   let sections = $derived.by<ReleaseSection[]>(() => {
     const rawSections: {
@@ -145,6 +167,24 @@
   }
 
   /**
+   * 手動で最新アップデートの有無を確認する
+   */
+  async function handleCheckUpdate(): Promise<void> {
+    if (isCheckingUpdate || isUpdating) return;
+    isCheckingUpdate = true;
+    updateStatusMessage = "";
+    try {
+      const info = await UpdaterService.checkForUpdates();
+      availableUpdate = info;
+      if (!info) {
+        updateStatusMessage = "お使いのバージョンは最新です。";
+      }
+    } finally {
+      isCheckingUpdate = false;
+    }
+  }
+
+  /**
    * コミット件名からカテゴリキーとプレフィックスを除いた本文を抽出する
    * @param subject コミット件名
    * @returns カテゴリキーと整形済みメッセージ
@@ -199,6 +239,26 @@
         <p class="small-text no-margin">{DESCRIPTION}</p>
       </div>
       <span class="chip fill bold">v{VERSION}</span>
+
+      {#if IS_TAURI}
+        {#if availableUpdate}
+          <button type="button" class="primary small" disabled={isUpdating} onclick={() => onupdate?.()}>
+            <i>system_update_alt</i>
+            <span>
+              {isUpdating ? `更新中 (${updateProgress}%)` : `v${availableUpdate.version} にアップデート`}
+            </span>
+          </button>
+        {:else}
+          <button type="button" class="border small" disabled={isCheckingUpdate} onclick={handleCheckUpdate}>
+            <i>refresh</i>
+            <span>{isCheckingUpdate ? "確認中..." : "更新を確認"}</span>
+          </button>
+        {/if}
+      {/if}
+
+      {#if updateStatusMessage}
+        <p class="small-text top-margin no-margin">{updateStatusMessage}</p>
+      {/if}
     </div>
 
     <div class="space"></div>

@@ -12,7 +12,8 @@
   import { IS_TAURI, LcdSyncService } from "./core/lcdSync";
   import { PresetService } from "./core/preset";
   import { TimetableService } from "./core/timetable";
-  import type { LayerOperationValue, LoadedPresetItem } from "./core/types";
+  import { UpdaterService } from "./core/updater";
+  import type { AvailableUpdateInfo, LayerOperationValue, LoadedPresetItem } from "./core/types";
   import Dropdown from "./components/Dropdown.svelte";
   import FileButton from "./components/FileButton.svelte";
   import Header from "./components/Header.svelte";
@@ -47,6 +48,15 @@
 
   /** 移動・削除により読み込めなかったファイルの通知メッセージ */
   let missingFilesNotice = $state<string>("");
+
+  /** 利用可能なアップデート情報 */
+  let availableUpdate = $state<AvailableUpdateInfo | null>(null);
+
+  /** アップデートのダウンロード・インストール進行中フラグ */
+  let isUpdating = $state<boolean>(false);
+
+  /** アップデートのダウンロード進捗率 (0〜100) */
+  let updateProgress = $state<number>(0);
 
   /** アクティブなダイヤグラムCSV文字列 */
   let timetableCsv = $derived(activeItem?.timetableCsv ?? "");
@@ -147,6 +157,30 @@
         missingFilesNotice = "";
       }
     }, 5000);
+  }
+
+  /**
+   * 検出されたアップデートをダウンロードして適用する
+   */
+  async function handleApplyUpdate(): Promise<void> {
+    if (!availableUpdate || isUpdating) return;
+    if (isDirty) {
+      const ok = await ArchiveService.confirmDiscardChanges(
+        "未保存の変更があります。アップデートを実行して再起動しますか？",
+      );
+      if (!ok) return;
+    }
+
+    isUpdating = true;
+    try {
+      await UpdaterService.downloadAndInstall((pct) => {
+        updateProgress = pct;
+      });
+    } catch (err) {
+      console.error("Update install failed:", err);
+      showNotice("アップデートの適用に失敗しました。");
+      isUpdating = false;
+    }
   }
 
   /**
@@ -511,6 +545,10 @@
     window.addEventListener("keydown", handleKeyDown);
 
     if (!IS_TAURI) {
+      // 起動時にバックグラウンドでアップデートを確認
+      UpdaterService.checkForUpdates().then((info) => {
+        availableUpdate = info;
+      });
       return () => window.removeEventListener("keydown", handleKeyDown);
     }
 
@@ -569,6 +607,20 @@
     />
     <div class="max" data-tauri-drag-region></div>
 
+    {#if availableUpdate}
+      <button
+        type="button"
+        class="primary small"
+        disabled={isUpdating}
+        onclick={handleApplyUpdate}
+        title={`最新バージョン v${availableUpdate.version} が利用可能です`}
+      >
+        <i>system_update_alt</i>
+        <span>
+          {isUpdating ? `更新中 (${updateProgress}%)` : `v${availableUpdate.version} に更新`}
+        </span>
+      </button>
+    {/if}
     {#if activeTrips.length > 0 && currentView === "driver"}
       <Dropdown
         bind:value={selectedTripIdx}
@@ -658,7 +710,7 @@
         </article>
       {/if}
     {:else if currentView === "info"}
-      <InfoView />
+      <InfoView bind:availableUpdate onupdate={handleApplyUpdate} {isUpdating} {updateProgress} />
     {/if}
 
     {#if missingFilesNotice}
