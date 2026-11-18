@@ -447,7 +447,7 @@
    * @param groupNo 削除対象のグループ番号
    */
   function handleRemoveLcdGroup(groupNo: string): void {
-    delete preset.lcdGroups[groupNo];
+    PresetService.removeLcdGroup(preset, groupNo);
     previewGroupNo = Object.keys(preset.lcdGroups)[0] ?? "";
     previewSlideIdx = 0;
   }
@@ -784,7 +784,7 @@
                 <button
                   type="button"
                   class="small transparent circle error-text"
-                  onclick={() => delete preset.audioGroups?.[gNo]}
+                  onclick={() => PresetService.removeAudioGroup(preset, gNo)}
                 >
                   <i>delete</i>
                 </button>

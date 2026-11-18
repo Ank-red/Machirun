@@ -534,6 +534,57 @@ export class PresetService {
   }
 
   /**
+   * 音声グループを削除し、各音声スロット・ステップ・割り込み内の "group:<番号>" 参照を解除する
+   * @param preset 対象のプリセット
+   * @param groupNo 削除する音声グループ番号
+   */
+  static removeAudioGroup(preset: RoutePreset, groupNo: string): void {
+    if (!preset.audioGroups) return;
+    delete preset.audioGroups[groupNo];
+
+    const targetRef = `group:${groupNo}`;
+    for (const slot of Object.values(preset.audioSlots ?? {})) {
+      if (slot.defaultItemId === targetRef) slot.defaultItemId = "";
+      for (const [no, val] of Object.entries(slot.items)) {
+        if (val === targetRef) slot.items[no] = "";
+      }
+    }
+    for (const step of preset.actions) {
+      if (step.playAudioId === targetRef) step.playAudioId = undefined;
+    }
+    for (const intr of preset.interrupts ?? []) {
+      if (intr.playAudioId === targetRef) intr.playAudioId = undefined;
+    }
+  }
+
+  /**
+   * LCDグループを削除し、進行フェーズ・停留所上書き・ステップ・割り込み内の参照を解除する
+   * @param preset 対象のプリセット
+   * @param groupNo 削除するLCDグループ番号
+   */
+  static removeLcdGroup(preset: RoutePreset, groupNo: string): void {
+    delete preset.lcdGroups[groupNo];
+
+    const targetNum = Number(groupNo);
+    for (const phase of preset.progressionPhases) {
+      if (phase.lcdGroupNo === targetNum) phase.lcdGroupNo = undefined;
+    }
+    if (preset.stopLcdOverrides) {
+      for (const phaseMap of Object.values(preset.stopLcdOverrides)) {
+        for (const [phaseId, overrideNo] of Object.entries(phaseMap)) {
+          if (overrideNo === targetNum) delete phaseMap[phaseId];
+        }
+      }
+    }
+    for (const step of preset.actions) {
+      if (step.setLcdGroupNo === targetNum) step.setLcdGroupNo = undefined;
+    }
+    for (const intr of preset.interrupts ?? []) {
+      if (intr.lcdGroupNo === targetNum) intr.lcdGroupNo = undefined;
+    }
+  }
+
+  /**
    * 文字列配列（visibleLayers や playAudioSlots）に対するチェックボックスON/OFFを切り替える共通ヘルパー
    * @param list 対象のキー配列
    * @param key 追加・削除するキー
