@@ -1,4 +1,4 @@
-name: Build Desktop App (Release)
+name: デスクトップ版リリース
 
 on:
   workflow_dispatch: # ←これがあることで、GitHub上で「Run workflow」ボタンを押したときだけ手動実行できる
@@ -31,7 +31,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Linux dependencies (for Tauri & device_query)
+      - name: Linux依存関係のインストール (for Tauri & device_query)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
@@ -43,22 +43,22 @@ jobs:
             libx11-dev \
             rpm
 
-      - name: Setup Bun
+      - name: Bunのセットアップ
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Setup Rust
+      - name: Rustのセットアップ
         uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "./src-tauri -> target"
 
-      - name: Install frontend dependencies
+      - name: パッケージのインストール
         run: bun install
 
-      - name: Build and Release with Tauri
+      - name: ビルドとリリース処理
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
