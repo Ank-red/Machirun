@@ -21,7 +21,6 @@ const EXT_LANG_MAP: Record<string, string> = {
 /** 除外するファイル・ディレクトリパターン */
 const EXTRA_IGNORE = [
   ".vscode/",
-  ".github/",
   "src-tauri/icons/",
   "src-tauri/capabilities/",
   "bun.lockb",
@@ -29,7 +28,6 @@ const EXTRA_IGNORE = [
   "package-lock.json",
   "Cargo.lock",
   "bundle-code.ts",
-  "release.ts",
   OUTPUT_FILE,
 ];
 
