@@ -2,7 +2,7 @@ import "beercss";
 import "material-dynamic-colors";
 import "./main.scss";
 import { mount } from "svelte";
-import PassengerApp from "./PassengerApp.svelte";
+import PassengerApp from "./Passenger.svelte";
 
 ui("mode", "auto");
 await ui("theme", "#106f10");

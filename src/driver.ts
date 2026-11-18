@@ -2,7 +2,7 @@ import "beercss";
 import "material-dynamic-colors";
 import "./main.scss";
 import { mount } from "svelte";
-import DriverApp from "./DriverApp.svelte";
+import DriverApp from "./Driver.svelte";
 
 ui("mode", "dark");
 await ui("theme", "#106f10");

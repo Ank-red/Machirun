@@ -3,7 +3,7 @@
 
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import DriverView from "./views/Driver.svelte";
+  import StarfView from "./views/Starf.svelte";
   import EditorView from "./views/Editor.svelte";
   import InfoView from "./views/Info.svelte";
   import { ArchiveService } from "./core/archive";
@@ -681,7 +681,7 @@
 
 <main class="responsive padding">
   {#if currentView === "driver"}
-    <DriverView
+    <StarfView
       isLoading={isLoadingPresets}
       hasLoadedPresets={loadedPresets.length > 0}
       {currentTrip}
