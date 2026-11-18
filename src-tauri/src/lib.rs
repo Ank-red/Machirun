@@ -468,27 +468,40 @@ fn spawn_lcd_http_server() {
     });
 }
 
-/// 左右矢印キーのグローバル入力を監視し、フロントエンドへイベントを発火するスレッドを起動する
+/// 矢印キーおよび割り込みショートカットキーのグローバル入力を監視し、フロントエンドへイベントを発火するスレッドを起動する
 fn spawn_global_key_listener(app_handle: AppHandle) {
     thread::spawn(move || {
         let device_state = DeviceState::new();
-        let mut prev_right = false;
-        let mut prev_left = false;
+        let watched_keys: &[(Keycode, &str)] = &[
+            (Keycode::Right, "ArrowRight"),
+            (Keycode::Left, "ArrowLeft"),
+            (Keycode::Up, "ArrowUp"),
+            (Keycode::Down, "ArrowDown"),
+            (Keycode::Space, "Space"),
+            (Keycode::Enter, "Enter"),
+            (Keycode::Key1, "Digit1"),
+            (Keycode::Key2, "Digit2"),
+            (Keycode::Key3, "Digit3"),
+            (Keycode::Key4, "Digit4"),
+            (Keycode::Key5, "Digit5"),
+            (Keycode::Key6, "Digit6"),
+            (Keycode::Key7, "Digit7"),
+            (Keycode::Key8, "Digit8"),
+            (Keycode::Key9, "Digit9"),
+        ];
+        let mut prev_pressed = vec![false; watched_keys.len()];
 
         loop {
             let keys = device_state.get_keys();
-            let right = keys.contains(&Keycode::Right);
-            let left = keys.contains(&Keycode::Left);
 
-            if right && !prev_right {
-                let _ = app_handle.emit("global-key", "ArrowRight");
-            }
-            if left && !prev_left {
-                let _ = app_handle.emit("global-key", "ArrowLeft");
+            for (i, (keycode, code_str)) in watched_keys.iter().enumerate() {
+                let is_pressed = keys.contains(keycode);
+                if is_pressed && !prev_pressed[i] {
+                    let _ = app_handle.emit("global-key", *code_str);
+                }
+                prev_pressed[i] = is_pressed;
             }
 
-            prev_right = right;
-            prev_left = left;
             thread::sleep(Duration::from_millis(20));
         }
     });

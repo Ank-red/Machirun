@@ -473,6 +473,27 @@
     }
   }
 
+  /**
+   * ショートカットキーに対応する割り込みアクションを実行する
+   * @param keyCode 押下されたキーコード (例: "Space", "Digit1")
+   */
+  function triggerInterruptByKey(keyCode: string): void {
+    if (!currentTrip || currentActionIdx < 0) return;
+    const matched = (preset.interrupts ?? []).filter((intr) => intr.shortcutKey === keyCode);
+    if (matched.length === 0) return;
+
+    for (const intr of matched) {
+      if (intr.lcdGroupNo !== undefined) {
+        const nextGroupNo = String(intr.lcdGroupNo);
+        if (activeLcdGroupNo !== nextGroupNo) {
+          activeLcdGroupNo = nextGroupNo;
+          activeLcdSlideIdx = 0;
+        }
+      }
+      playStepAudio(intr.playAudioSlots, intr.playAudioId);
+    }
+  }
+
   // --- Effects & Lifecycle ---
 
   /** アクティブなプリセットの画像バイナリが変わったらRust側へ登録 */
@@ -536,6 +557,10 @@
         if (activeItem) {
           handleSaveActivePreset(e.shiftKey);
         }
+        return;
+      }
+      if (currentView === "driver" && (preset.interrupts ?? []).some((intr) => intr.shortcutKey === e.code)) {
+        e.preventDefault();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -576,6 +601,7 @@
       if (currentView !== "driver") return;
       if (event.payload === "ArrowRight") advanceStep();
       else if (event.payload === "ArrowLeft") retreatStep();
+      else triggerInterruptByKey(event.payload);
     }).then((fn) => {
       unlistenKey = fn;
     });
