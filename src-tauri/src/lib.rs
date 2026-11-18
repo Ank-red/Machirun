@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -15,169 +15,180 @@ use tiny_http::{Header, Response, Server};
 const OBS_LCD_HTML: &str = r#"<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>Machirun OBS LCD</title>
-  <style>
-    body, html {
-      align-items: center;
-      background: #000;
-      display: flex;
-      height: 100vh;
-      justify-content: center;
-      margin: 0;
-      overflow: hidden;
-      padding: 0;
-      width: 100vw;
-    }
-    #lcd-stage {
-      background: #000;
-      height: 56.25vw;
-      max-height: 100vh;
-      max-width: 177.78vh;
-      overflow: hidden;
-      position: relative;
-      width: 100vw;
-    }
-    .lcd-layer {
-      height: 100%;
-      left: 0;
-      object-fit: contain;
-      pointer-events: none;
-      position: absolute;
-      top: 0;
-      width: 100%;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>Machirun OBS LCD</title>
+    <style>
+        body, html {
+            align-items: center;
+            background: #000;
+            display: flex;
+            height: 100vh;
+            justify-content: center;
+            margin: 0;
+            overflow: hidden;
+            padding: 0;
+            width: 100vw;
+        }
+        #lcd-stage {
+            background: #000;
+            height: 56.25vw;
+            max-height: 100vh;
+            max-width: 177.78vh;
+            overflow: hidden;
+            position: relative;
+            width: 100vw;
+        }
+        .lcd-layer {
+            height: 100%;
+            left: 0;
+            object-fit: contain;
+            pointer-events: none;
+            position: absolute;
+            top: 0;
+            width: 100%;
+        }
+    </style>
 </head>
 <body>
-  <div id="lcd-stage"></div>
-  <audio id="obs-audio" style="display:none;"></audio>
+    <div id="lcd-stage"></div>
+    <audio id="obs-audio" style="display:none;"></audio>
 
-  <script>
-    const audioUrlCache = {};
-    let lastAudioNonce = 0;
-    let audioPlayToken = 0;
+    <script>
+        const audioUrlCache = {};
+        let lastAudioNonce = 0;
+        let audioPlayToken = 0;
+        let lastAssetRevision = 0;
 
-    async function getAudioBlobUrl(fileName) {
-      if (audioUrlCache[fileName]) return audioUrlCache[fileName];
-      const res = await fetch(`/audio/${encodeURIComponent(fileName)}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const buf = await res.arrayBuffer();
-      const blob = new Blob([buf], { type: 'audio/ogg; codecs=opus' });
-      const url = URL.createObjectURL(blob);
-      audioUrlCache[fileName] = url;
-      return url;
-    }
-
-    async function playObsAudioQueue(files, token) {
-      const audioElement = document.getElementById('obs-audio');
-      audioElement.pause();
-
-      // 全ファイルを並列で事前取得してBlob URL化
-      const urlPromises = files.map(f => getAudioBlobUrl(f).catch(e => {
-        console.error("Audio fetch error:", f, e);
-        return null;
-      }));
-
-      for (const p of urlPromises) {
-        if (token !== audioPlayToken) return;
-        const blobUrl = await p;
-        if (!blobUrl || token !== audioPlayToken) continue;
-
-        await new Promise((resolve) => {
-          audioElement.onended = resolve;
-          audioElement.onerror = resolve;
-          audioElement.src = blobUrl;
-          audioElement.play().catch(e => {
-            console.error("Audio playback failed:", e);
-            resolve();
-          });
-        });
-      }
-    }
-
-    async function updateLcd() {
-      try {
-        const res = await fetch('/api/state', { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-
-        const stage = document.getElementById('lcd-stage');
-        const preset = data.preset;
-
-        if (!preset || !preset.lcdGroups) {
-          stage.innerHTML = '';
-          return;
+        async function getAudioBlobUrl(fileName) {
+            if (audioUrlCache[fileName]) return audioUrlCache[fileName];
+            const res = await fetch(`/audio/${encodeURIComponent(fileName)}`, { cache: 'no-store' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const buf = await res.arrayBuffer();
+            const blob = new Blob([buf], { type: 'audio/ogg; codecs=opus' });
+            const url = URL.createObjectURL(blob);
+            audioUrlCache[fileName] = url;
+            return url;
         }
 
-        const groupNo = data.group_no || "1";
-        const slideIdx = data.slide_idx || 0;
-        const layerIndices = data.layer_indices || {};
-        const playingFiles = (data.playing_audio_files && data.playing_audio_files.length > 0)
-          ? data.playing_audio_files
-          : (data.playing_audio_file ? [data.playing_audio_file] : []);
-        const nonce = data.audio_nonce || 0;
+        async function playObsAudioQueue(files, token) {
+            const audioElement = document.getElementById('obs-audio');
+            audioElement.pause();
 
-        if (playingFiles.length > 0 && nonce !== lastAudioNonce) {
-          lastAudioNonce = nonce;
-          const currentToken = ++audioPlayToken;
-          playObsAudioQueue(playingFiles, currentToken);
+            // 全ファイルを並列で事前取得してBlob URL化
+            const urlPromises = files.map(f => getAudioBlobUrl(f).catch(e => {
+                console.error("Audio fetch error:", f, e);
+                return null;
+            }));
+
+            for (const p of urlPromises) {
+                if (token !== audioPlayToken) return;
+                const blobUrl = await p;
+                if (!blobUrl || token !== audioPlayToken) continue;
+
+                await new Promise((resolve) => {
+                    audioElement.onended = resolve;
+                    audioElement.onerror = resolve;
+                    audioElement.src = blobUrl;
+                    audioElement.play().catch(e => {
+                        console.error("Audio playback failed:", e);
+                        resolve();
+                    });
+                });
+            }
         }
 
-        const group = preset.lcdGroups[groupNo];
-        if (!group || !group.slides || !group.slides[slideIdx]) {
-          stage.innerHTML = '';
-          return;
-        }
-        const slide = group.slides[slideIdx];
-        let html = '';
-
-        if (slide.baseImageId && preset.images?.[slide.baseImageId]) {
-          const imgAsset = preset.images[slide.baseImageId];
-          html += `<img src="/image/${encodeURIComponent(imgAsset.fileName)}" class="lcd-layer" />`;
-        }
-
-        if (slide.visibleLayers && preset.layerSlots) {
-          for (const slotKey of slide.visibleLayers) {
-            const slot = preset.layerSlots[slotKey];
-            if (!slot?.items) continue;
-
-            const overrideIdx = slide.layerOverrides?.[slotKey];
-            const activeIdx = overrideIdx !== undefined ? overrideIdx : layerIndices[slotKey];
-            if (activeIdx === null || activeIdx === undefined || activeIdx === "+1") continue;
-
-            let hashId = "";
-            if (slot.linkedToCsvStop === false) {
-              hashId = slot.items[String(activeIdx)] || slot.defaultItemId || "";
-            } else {
-              for (let i = Number(activeIdx); i >= 0; i--) {
-                if (slot.items[String(i)]) {
-                  hashId = slot.items[String(i)];
-                  break;
+        async function updateLcd() {
+            try {
+                const res = await fetch('/api/state', { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json();
+                const rev = data.asset_revision || 0;
+                if (rev !== lastAssetRevision) {
+                    for (const url of Object.values(audioUrlCache)) {
+                        URL.revokeObjectURL(url);
+                    }
+                    for (const key of Object.keys(audioUrlCache)) {
+                        delete audioUrlCache[key];
+                    }
+                    lastAssetRevision = rev;
                 }
-              }
-              if (!hashId) hashId = slot.defaultItemId || "";
-            }
 
-            if (hashId && preset.images?.[hashId]) {
-              const layerAsset = preset.images[hashId];
-              html += `<img src="/image/${encodeURIComponent(layerAsset.fileName)}" class="lcd-layer" />`;
+                const stage = document.getElementById('lcd-stage');
+                const preset = data.preset;
+
+                if (!preset || !preset.lcdGroups) {
+                    stage.innerHTML = '';
+                    return;
+                }
+
+                const groupNo = data.group_no || "1";
+                const slideIdx = data.slide_idx || 0;
+                const layerIndices = data.layer_indices || {};
+                const playingFiles = (data.playing_audio_files && data.playing_audio_files.length > 0)
+                    ? data.playing_audio_files
+                    : (data.playing_audio_file ? [data.playing_audio_file] : []);
+                const nonce = data.audio_nonce || 0;
+
+                if (playingFiles.length > 0 && nonce !== lastAudioNonce) {
+                    lastAudioNonce = nonce;
+                    const currentToken = ++audioPlayToken;
+                    playObsAudioQueue(playingFiles, currentToken);
+                }
+
+                const group = preset.lcdGroups[groupNo];
+                if (!group || !group.slides || !group.slides[slideIdx]) {
+                    stage.innerHTML = '';
+                    return;
+                }
+                const slide = group.slides[slideIdx];
+                let html = '';
+
+                if (slide.baseImageId && preset.images?.[slide.baseImageId]) {
+                    const imgAsset = preset.images[slide.baseImageId];
+                    html += `<img src="/image/${encodeURIComponent(imgAsset.fileName)}?rev=${rev}" class="lcd-layer" />`;
+                }
+
+                if (slide.visibleLayers && preset.layerSlots) {
+                    for (const slotKey of slide.visibleLayers) {
+                        const slot = preset.layerSlots[slotKey];
+                        if (!slot?.items) continue;
+
+                        const overrideIdx = slide.layerOverrides?.[slotKey];
+                        const activeIdx = overrideIdx !== undefined ? overrideIdx : layerIndices[slotKey];
+                        if (activeIdx === null || activeIdx === undefined || activeIdx === "+1") continue;
+
+                        let hashId = "";
+                        if (slot.linkedToCsvStop === false) {
+                            hashId = slot.items[String(activeIdx)] || slot.defaultItemId || "";
+                        } else {
+                            for (let i = Number(activeIdx); i >= 0; i--) {
+                                if (slot.items[String(i)]) {
+                                    hashId = slot.items[String(i)];
+                                    break;
+                                }
+                            }
+                            if (!hashId) hashId = slot.defaultItemId || "";
+                        }
+
+                        if (hashId && preset.images?.[hashId]) {
+                            const layerAsset = preset.images[hashId];
+                            html += `<img src="/image/${encodeURIComponent(layerAsset.fileName)}?rev=${rev}" class="lcd-layer" />`;
+                        }
+                    }
+                }
+
+                if (stage.dataset.lastHtml !== html) {
+                    stage.innerHTML = html;
+                    stage.dataset.lastHtml = html;
+                }
+            } catch (e) {
+                console.error("LCD Sync Error:", e);
             }
-          }
         }
 
-        if (stage.dataset.lastHtml !== html) {
-          stage.innerHTML = html;
-          stage.dataset.lastHtml = html;
-        }
-      } catch (e) {
-        console.error("LCD Sync Error:", e);
-      }
-    }
-
-    setInterval(updateLcd, 150);
-    updateLcd();
-  </script>
+        setInterval(updateLcd, 150);
+        updateLcd();
+    </script>
 </body>
 </html>"#;
 
@@ -192,7 +203,12 @@ struct LcdServerState {
     #[serde(default)]
     playing_audio_files: Vec<String>,
     audio_nonce: u64,
+    #[serde(default)]
+    asset_revision: u64,
 }
+
+/// アセットバイナリの更新・差し替え検知用リビジョン番号
+static ASSET_REVISION: AtomicU64 = AtomicU64::new(1);
 
 lazy_static! {
     /// フロントエンドから同期された最新のLCD表示状態
@@ -208,7 +224,8 @@ lazy_static! {
 
 /// フロントエンドのLCD状態をRust側のメモリへ同期するTauriコマンド
 #[tauri::command]
-fn sync_lcd_to_rust(state: LcdServerState) {
+fn sync_lcd_to_rust(mut state: LcdServerState) {
+    state.asset_revision = ASSET_REVISION.load(Ordering::SeqCst);
     if let Ok(mut locked) = LCD_STATE.lock() {
         *locked = state;
     }
@@ -217,6 +234,7 @@ fn sync_lcd_to_rust(state: LcdServerState) {
 /// 画像バイナリ一式をRust側のメモリキャッシュへ登録するTauriコマンド
 #[tauri::command]
 fn register_image_blobs(blobs: HashMap<String, Vec<u8>>) {
+    ASSET_REVISION.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut locked) = IMAGE_BLOBS_CACHE.lock() {
         *locked = blobs;
     }
@@ -225,6 +243,7 @@ fn register_image_blobs(blobs: HashMap<String, Vec<u8>>) {
 /// 音声バイナリ一式をRust側のメモリキャッシュへ登録するTauriコマンド
 #[tauri::command]
 fn register_audio_blobs(blobs: HashMap<String, Vec<u8>>) {
+    ASSET_REVISION.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut locked) = AUDIO_BLOBS_CACHE.lock() {
         *locked = blobs;
     }
@@ -413,7 +432,8 @@ fn spawn_lcd_http_server() {
 
                 if clean_path == "/api/state" {
                     let json = {
-                        let locked = LCD_STATE.lock().unwrap();
+                        let mut locked = LCD_STATE.lock().unwrap();
+                        locked.asset_revision = ASSET_REVISION.load(Ordering::SeqCst);
                         serde_json::to_vec(&*locked).unwrap_or_else(|_| b"{}".to_vec())
                     };
                     let _ = request.respond(build_response(json, b"application/json"));
