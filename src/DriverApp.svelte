@@ -3,7 +3,6 @@
 
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import DownloadView from "./views/Download.svelte";
   import DriverView from "./views/Driver.svelte";
   import EditorView from "./views/Editor.svelte";
   import InfoView from "./views/Info.svelte";
@@ -19,9 +18,6 @@
   import Header from "./components/Header.svelte";
 
   // --- Constants & Services ---
-
-  /** 開発モード判定フラグ */
-  const IS_DEV = import.meta.env.DEV;
 
   /** 車載器運行用の音声プレイヤーインスタンス */
   const driverAudioPlayer = new AudioPlayerService();
@@ -592,132 +588,128 @@
   });
 </script>
 
-{#if !IS_TAURI && !IS_DEV}
-  <DownloadView />
-{:else}
-  <Header title="Machirun">
-    <Dropdown
-      value={currentView}
-      onchange={handleViewChange}
-      options={[
-        { value: "driver", label: "車載器" },
-        { value: "editor", label: "停留所エディタ" },
-        { value: "info", label: "ソフトウェア情報" },
-      ]}
-    />
-    <div class="max" data-tauri-drag-region></div>
+<Header title="Machirun">
+  <Dropdown
+    value={currentView}
+    onchange={handleViewChange}
+    options={[
+      { value: "driver", label: "車載器" },
+      { value: "editor", label: "停留所エディタ" },
+      { value: "info", label: "ソフトウェア情報" },
+    ]}
+  />
+  <div class="max" data-tauri-drag-region></div>
 
-    {#if availableUpdate}
-      <button
-        type="button"
-        class="primary small"
-        disabled={isUpdating}
-        onclick={handleApplyUpdate}
-        title={`最新バージョン v${availableUpdate.version} が利用可能です`}
-      >
-        <i>system_update_alt</i>
-        <span>
-          {isUpdating ? `更新中 (${updateProgress}%)` : `v${availableUpdate.version} に更新`}
-        </span>
-      </button>
-    {/if}
-    {#if activeTrips.length > 0 && currentView === "driver"}
-      <Dropdown
-        bind:value={selectedTripIdx}
-        onchange={() => applyStepAt(-1, false)}
-        options={activeTrips.map((trip, idx) => ({
-          value: idx,
-          label: `${trip.trainNumber}便 (${trip.operationNumber}) ${trip.destination}行`,
-        }))}
-      />
-    {/if}
-    {#if loadedPresets.length > 0}
-      <Dropdown
-        value={activePresetId}
-        options={loadedPresets.map((p) => ({
-          value: p.id,
-          label: p.fileName,
-        }))}
-        onchange={handlePresetChange}
-      />
-    {/if}
-    <button type="button" class="border circle" onclick={toggleMute} title={isMuted ? "ミュート解除" : "ミュート"}>
-      <i>{isMuted ? "volume_off" : "volume_up"}</i>
+  {#if availableUpdate}
+    <button
+      type="button"
+      class="primary small"
+      disabled={isUpdating}
+      onclick={handleApplyUpdate}
+      title={`最新バージョン v${availableUpdate.version} が利用可能です`}
+    >
+      <i>system_update_alt</i>
+      <span>
+        {isUpdating ? `更新中 (${updateProgress}%)` : `v${availableUpdate.version} に更新`}
+      </span>
     </button>
-    {#if IS_TAURI}
-      <button type="button" class="border" onclick={() => handleOpenNativeFiles(false)}>
-        <i>folder_open</i>
-        <span>mchrn追加読込</span>
-      </button>
+  {/if}
+  {#if activeTrips.length > 0 && currentView === "driver"}
+    <Dropdown
+      bind:value={selectedTripIdx}
+      onchange={() => applyStepAt(-1, false)}
+      options={activeTrips.map((trip, idx) => ({
+        value: idx,
+        label: `${trip.trainNumber}便 (${trip.operationNumber}) ${trip.destination}行`,
+      }))}
+    />
+  {/if}
+  {#if loadedPresets.length > 0}
+    <Dropdown
+      value={activePresetId}
+      options={loadedPresets.map((p) => ({
+        value: p.id,
+        label: p.fileName,
+      }))}
+      onchange={handlePresetChange}
+    />
+  {/if}
+  <button type="button" class="border circle" onclick={toggleMute} title={isMuted ? "ミュート解除" : "ミュート"}>
+    <i>{isMuted ? "volume_off" : "volume_up"}</i>
+  </button>
+  {#if IS_TAURI}
+    <button type="button" class="border" onclick={() => handleOpenNativeFiles(false)}>
+      <i>folder_open</i>
+      <span>mchrn追加読込</span>
+    </button>
+  {:else}
+    <FileButton
+      label="mchrn追加読込"
+      icon="folder_open"
+      accept=".mchrn,.zip"
+      multiple={true}
+      onselect={handleLoadPresetFiles}
+    />
+  {/if}
+</Header>
+
+<main class="responsive padding">
+  {#if currentView === "driver"}
+    <DriverView
+      isLoading={isLoadingPresets}
+      hasLoadedPresets={loadedPresets.length > 0}
+      {currentTrip}
+      {currentStop}
+      {currentStopIdx}
+      {currentActionIdx}
+      actions={effectiveActions}
+      {now}
+      onadvance={advanceStep}
+      onretreat={retreatStep}
+    />
+  {:else if currentView === "editor"}
+    {#if isLoadingPresets}
+      <article class="border round large-padding center-align">
+        <progress class="circle large"></progress>
+        <h6 class="top-margin">プリセットファイルを読み込み中...</h6>
+      </article>
+    {:else if activeItem}
+      <EditorView
+        bind:preset={activeItem.preset}
+        bind:timetableCsv={activeItem.timetableCsv}
+        bind:imageBlobs={activeItem.imageBlobs}
+        bind:imageUrls={activeItem.imageUrls}
+        bind:audioBlobs={activeItem.audioBlobs}
+        bind:audioUrls={activeItem.audioUrls}
+        {isMuted}
+        {isDirty}
+        oncreate={handleCreateNewPreset}
+        onsave={() => handleSaveActivePreset(false)}
+        onsaveas={() => handleSaveActivePreset(true)}
+        onimport={IS_TAURI ? () => handleOpenNativeFiles(true) : undefined}
+      />
     {:else}
-      <FileButton
-        label="mchrn追加読込"
-        icon="folder_open"
-        accept=".mchrn,.zip"
-        multiple={true}
-        onselect={handleLoadPresetFiles}
-      />
+      <article class="border round large-padding center-align">
+        <p>
+          編集する mchrn
+          プリセットが読み込まれていません。「mchrn追加読込」からファイルを追加するか、新規作成してください。
+        </p>
+        <nav class="center-align">
+          <button type="button" class="primary" onclick={handleCreateNewPreset}>
+            <i>add</i>
+            <span>新規プリセットを作成</span>
+          </button>
+        </nav>
+      </article>
     {/if}
-  </Header>
+  {:else if currentView === "info"}
+    <InfoView bind:availableUpdate onupdate={handleApplyUpdate} {isUpdating} {updateProgress} />
+  {/if}
 
-  <main class="responsive padding">
-    {#if currentView === "driver"}
-      <DriverView
-        isLoading={isLoadingPresets}
-        hasLoadedPresets={loadedPresets.length > 0}
-        {currentTrip}
-        {currentStop}
-        {currentStopIdx}
-        {currentActionIdx}
-        actions={effectiveActions}
-        {now}
-        onadvance={advanceStep}
-        onretreat={retreatStep}
-      />
-    {:else if currentView === "editor"}
-      {#if isLoadingPresets}
-        <article class="border round large-padding center-align">
-          <progress class="circle large"></progress>
-          <h6 class="top-margin">プリセットファイルを読み込み中...</h6>
-        </article>
-      {:else if activeItem}
-        <EditorView
-          bind:preset={activeItem.preset}
-          bind:timetableCsv={activeItem.timetableCsv}
-          bind:imageBlobs={activeItem.imageBlobs}
-          bind:imageUrls={activeItem.imageUrls}
-          bind:audioBlobs={activeItem.audioBlobs}
-          bind:audioUrls={activeItem.audioUrls}
-          {isMuted}
-          {isDirty}
-          oncreate={handleCreateNewPreset}
-          onsave={() => handleSaveActivePreset(false)}
-          onsaveas={() => handleSaveActivePreset(true)}
-          onimport={IS_TAURI ? () => handleOpenNativeFiles(true) : undefined}
-        />
-      {:else}
-        <article class="border round large-padding center-align">
-          <p>
-            編集する mchrn
-            プリセットが読み込まれていません。「mchrn追加読込」からファイルを追加するか、新規作成してください。
-          </p>
-          <nav class="center-align">
-            <button type="button" class="primary" onclick={handleCreateNewPreset}>
-              <i>add</i>
-              <span>新規プリセットを作成</span>
-            </button>
-          </nav>
-        </article>
-      {/if}
-    {:else if currentView === "info"}
-      <InfoView bind:availableUpdate onupdate={handleApplyUpdate} {isUpdating} {updateProgress} />
-    {/if}
-
-    {#if missingFilesNotice}
-      <div class="snackbar active">
-        <i>info</i>
-        <div class="max">{missingFilesNotice}</div>
-      </div>
-    {/if}
-  </main>
-{/if}
+  {#if missingFilesNotice}
+    <div class="snackbar active">
+      <i>info</i>
+      <div class="max">{missingFilesNotice}</div>
+    </div>
+  {/if}
+</main>
