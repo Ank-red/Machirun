@@ -31,6 +31,8 @@
     "lint:code": "biome lint src vite.config.ts contextCode.ts",
     "lint:style": "stylelint \"src/**/*.{css,scss,svelte}\" --fix",
     "context": "bun run contextCode.ts",
+    "release:r": "bun run release.ts release",
+    "release:pre": "bun run release.ts pre-release",
     "release:patch": "bun run release.ts patch",
     "release:minor": "bun run release.ts minor",
     "release:major": "bun run release.ts major"
