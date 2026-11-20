@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, Url, WindowEvent};
+use tauri_plugin_updater::UpdaterExt;
 use tiny_http::{Header, Response, Server};
 
 /// OBSブラウザソースへ配信するクライアントHTMLテンプレート
@@ -284,6 +285,85 @@ async fn save_mchrn_file(
     }
 }
 
+/// アップデート確認結果の返却用構造体
+#[derive(Serialize)]
+struct UpdateCheckResult {
+    version: String,
+    body: String,
+}
+
+/// 指定エンドポイントURLを検証してパースする内部ヘルパー
+fn parse_allowed_update_url(endpoint: &str) -> Result<Url, String> {
+    const ALLOWED_PREFIX: &str = "https://github.com/Ank-red/Machirun/releases/";
+    if !endpoint.starts_with(ALLOWED_PREFIX) {
+        return Err("Invalid update endpoint".to_string());
+    }
+    Url::parse(endpoint).map_err(|e| e.to_string())
+}
+
+/// 指定したエンドポイントで最新アップデートの有無を確認するTauriコマンド
+#[tauri::command]
+async fn check_update_with_endpoint(
+    app: AppHandle,
+    endpoint: String,
+) -> Result<Option<UpdateCheckResult>, String> {
+    let url = parse_allowed_update_url(&endpoint)?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    match updater.check().await.map_err(|e| e.to_string())? {
+        Some(update) => Ok(Some(UpdateCheckResult {
+            version: update.version,
+            body: update.body.unwrap_or_default(),
+        })),
+        None => Ok(None),
+    }
+}
+
+/// 指定したエンドポイントのアップデートをダウンロード・インストールするTauriコマンド
+#[tauri::command]
+async fn install_update_with_endpoint(app: AppHandle, endpoint: String) -> Result<(), String> {
+    let url = parse_allowed_update_url(&endpoint)?;
+    let updater = app
+        .updater_builder()
+        .endpoints(vec![url])
+        .map_err(|e| e.to_string())?
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+
+    let mut downloaded: u64 = 0;
+    let progress_app = app.clone();
+    let finish_app = app.clone();
+
+    update
+        .download_and_install(
+            move |chunk_len, content_len| {
+                downloaded += chunk_len as u64;
+                if let Some(total) = content_len.filter(|&t| t > 0) {
+                    let pct = ((downloaded as f64 / total as f64) * 100.0)
+                        .round()
+                        .min(100.0) as u32;
+                    let _ = progress_app.emit("update-progress", pct);
+                }
+            },
+            move || {
+                let _ = finish_app.emit("update-progress", 100u32);
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 /// 読み込んだファイルのパス・ファイル名・バイナリデータを返す構造体
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -554,7 +634,9 @@ pub fn run() {
             read_mchrn_files_by_paths,
             write_mchrn_file_direct,
             confirm_unsaved_dialog,
-            set_unsaved_changes
+            set_unsaved_changes,
+            check_update_with_endpoint,
+            install_update_with_endpoint
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

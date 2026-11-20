@@ -1,82 +1,135 @@
 import { $ } from "bun";
 
-type BumpType = "major" | "minor" | "patch" | "release" | "pre-release";
+type VersionMode = "major" | "minor" | "patch" | "pre";
+type CommandType = VersionMode | "release";
 
-const bumpType = process.argv[2] as BumpType;
-if (["major", "minor", "patch"].includes(bumpType)) {
-  runVersionUp();
-} else if (["release", "pre-release"].includes(bumpType)) {
-  runRelease();
-} else {
-  console.error("使い方: bun run release.ts <major | minor | patch | release | pre-release>");
+const arg = process.argv[2] as CommandType;
+const VALID_COMMANDS: CommandType[] = ["major", "minor", "patch", "pre", "release"];
+
+if (!VALID_COMMANDS.includes(arg)) {
+  console.error("使い方: bun run release.ts <major | minor | patch | pre | release>");
   process.exit(1);
 }
 
-function incrementVersion(version: string, type: BumpType): string {
-  const [major, minor, patch] = version.split(".").map(Number);
-  if (type === "major") return `${major + 1}.0.0`;
-  if (type === "minor") return `${major}.${minor + 1}.0`;
+if (arg === "release") {
+  await runRelease();
+} else {
+  await runVersionUp(arg);
+}
+
+/**
+ * 現在のバージョン文字列から次のバージョン文字列を算出する
+ * 例:
+ * - "1.0.2" + "patch" -> "1.0.3"
+ * - "1.0.2" + "pre"   -> "1.0.3-pre.1"
+ * - "1.0.3-pre.1" + "pre" -> "1.0.3-pre.2"
+ * - "1.0.3-pre.2" + "patch" / "minor" / "major" -> プレリリース識別子を落として確定
+ */
+function nextVersion(current: string, mode: VersionMode): string {
+  const preMatch = current.match(/^(\d+)\.(\d+)\.(\d+)-pre\.(\d+)$/);
+
+  if (preMatch) {
+    const major = Number(preMatch[1]);
+    const minor = Number(preMatch[2]);
+    const patch = Number(preMatch[3]);
+    const preNum = Number(preMatch[4]);
+
+    if (mode === "pre") {
+      return `${major}.${minor}.${patch}-pre.${preNum + 1}`;
+    }
+    // すでにプレリリース番号を進めている状態で major / minor / patch を指定した場合は確定版へ
+    return `${major}.${minor}.${patch}`;
+  }
+
+  const [major, minor, patch] = current.split(".").map(Number);
+
+  if (mode === "pre") {
+    return `${major}.${minor}.${patch + 1}-pre.1`;
+  }
+  if (mode === "major") {
+    return `${major + 1}.0.0`;
+  }
+  if (mode === "minor") {
+    return `${major}.${minor + 1}.0`;
+  }
   return `${major}.${minor}.${patch + 1}`;
 }
 
-async function runRelease() {
-  const pkgFile = Bun.file("package.json");
-  const pkg = await pkgFile.json();
+async function runRelease(): Promise<void> {
+  const pkg = await Bun.file("package.json").json();
   const version: string = pkg.version;
-  const tagName = (bumpType === "pre-release") ? `v${version}-pre` : `v${version}`;
+  const tagName = `v${version}`;
+
   await $`git tag ${tagName}`;
   await $`git push origin ${tagName}`;
+
+  console.log(`🏷️ タグ ${tagName} を作成してプッシュしました`);
 }
 
-async function runVersionUp() {
-  const pkgFile = Bun.file("package.json");
-  const pkg = await pkgFile.json();
+async function runVersionUp(mode: VersionMode): Promise<void> {
+  const pkgPath = "package.json";
+  const pkg = await Bun.file(pkgPath).json();
   const oldVersion: string = pkg.version;
-  const newVersion = incrementVersion(oldVersion, bumpType);
+  const newVersion = nextVersion(oldVersion, mode);
+  const appTitle: string = pkg.appTitle || "Machirun";
+  const pkgName: string = pkg.name || "machirun";
 
   console.log(`🚀 バージョンを ${oldVersion} -> ${newVersion} に更新します...`);
 
-  // 1. package.json のバージョン更新
+  // 1. package.json
   pkg.version = newVersion;
-  await Bun.write("package.json", JSON.stringify(pkg, null, 2) + "\n");
+  await Bun.write(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 
-  // 2. tauri.conf.json のバージョン更新
+  // 2. src-tauri/tauri.conf.json
   const tauriConfPath = "src-tauri/tauri.conf.json";
   const tauriConf = await Bun.file(tauriConfPath).json();
   tauriConf.version = newVersion;
-  await Bun.write(tauriConfPath, JSON.stringify(tauriConf, null, 2) + "\n");
+  tauriConf.productName = appTitle;
+  tauriConf.mainBinaryName = pkgName;
+  if (Array.isArray(tauriConf.app?.windows) && tauriConf.app.windows[0]) {
+    tauriConf.app.windows[0].title = appTitle;
+  }
+  await Bun.write(tauriConfPath, `${JSON.stringify(tauriConf, null, 2)}\n`);
 
-  // 3. Cargo.toml (バージョン、説明、リポジトリ、作者を package.json に準拠して同期)
+  // 3. src-tauri/Cargo.toml
   const cargoPath = "src-tauri/Cargo.toml";
   const cargoLockPath = "src-tauri/Cargo.lock";
   let cargoText = await Bun.file(cargoPath).text();
 
-  // バージョン更新
   cargoText = cargoText.replace(/^(version\s*=\s*)"[^"]+"/m, `$1"${newVersion}"`);
-  // 説明文の同期
   if (pkg.description) {
     cargoText = cargoText.replace(/^(description\s*=\s*)[^\r\n]+/m, `$1"${pkg.description}"`);
   }
-  // リポジトリの同期
   const repoUrl = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
   if (repoUrl) {
     cargoText = cargoText.replace(/^(repository\s*=\s*)[^\r\n]+/m, `$1"${repoUrl}"`);
   }
-  // 作者の同期
   if (pkg.author) {
     const authorStr = typeof pkg.author === "string" ? pkg.author : pkg.author.name;
     cargoText = cargoText.replace(/^(authors\s*=\s*)\[[^\]]*\]/m, `$1["${authorStr}"]`);
   }
   await Bun.write(cargoPath, cargoText);
 
-  // 4. Cargo.lock の即時同期
+  // 4. wrangler.toml
+  const wranglerPath = "wrangler.toml";
+  const hasWrangler = await Bun.file(wranglerPath).exists();
+  if (hasWrangler) {
+    let wranglerText = await Bun.file(wranglerPath).text();
+    wranglerText = wranglerText.replace(/^(name\s*=\s*)"[^"]+"/m, `$1"${pkgName}"`);
+    await Bun.write(wranglerPath, wranglerText);
+  }
+
+  // 5. Cargo.lock 同期
   await $`cargo update -p app --manifest-path ${cargoPath}`;
 
-  // 5. Git コミット・タグ付与・プッシュ
-  await $`git add package.json ${tauriConfPath} ${cargoPath} ${cargoLockPath}`;
+  // 6. コミット・プッシュ・コンテキスト更新
+  const targets = [pkgPath, tauriConfPath, cargoPath, cargoLockPath];
+  if (hasWrangler) targets.push(wranglerPath);
+
+  await $`git add ${targets}`;
   await $`git commit -m ${newVersion}`;
   await $`git push origin HEAD`;
   await $`bun run context`;
 
-  console.log(`✅ バージョンアップ完了: v${newVersion} の更新とプッシュが完了しました！`);
+  console.log(`✅ バージョン更新完了: ${newVersion}`);
 }

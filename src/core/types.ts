@@ -260,3 +260,6 @@ export interface AvailableUpdateInfo {
   /** リリースノート（本文） */
   body: string;
 }
+
+/** アプリケーションのアップデートチャンネル */
+export type UpdateChannel = "stable" | "insider";

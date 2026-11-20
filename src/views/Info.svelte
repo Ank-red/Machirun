@@ -1,8 +1,9 @@
 <script lang="ts">
   // --- Imports ---
 
+  import Dropdown from "../components/Dropdown.svelte";
   import { IS_TAURI } from "../core/lcdSync";
-  import type { AvailableUpdateInfo, CommitEntry } from "../core/types";
+  import type { AvailableUpdateInfo, CommitEntry, UpdateChannel } from "../core/types";
   import { UpdaterService } from "../core/updater";
 
   // --- Props ---
@@ -101,6 +102,9 @@
   /** OBS URLのクリップボードコピー完了フラグ */
   let copied = $state(false);
 
+  /** 選択中のアップデートチャンネル */
+  let updateChannel = $state<UpdateChannel>(UpdaterService.getChannel());
+
   /** アップデート手動確認中フラグ */
   let isCheckingUpdate = $state(false);
 
@@ -164,6 +168,18 @@
     await navigator.clipboard.writeText(OBS_URL);
     copied = true;
     setTimeout(() => (copied = false), 2000);
+  }
+
+  /**
+   * アップデートチャンネルを変更して再確認する
+   * @param nextChannel 新しいチャンネル
+   */
+  async function handleChannelChange(nextChannel: UpdateChannel): Promise<void> {
+    updateChannel = nextChannel;
+    UpdaterService.setChannel(nextChannel);
+    availableUpdate = null;
+    updateStatusMessage = "";
+    await handleCheckUpdate();
   }
 
   /**
@@ -241,6 +257,14 @@
       <span class="chip fill bold">v{VERSION}</span>
 
       {#if IS_TAURI}
+        <Dropdown
+          value={updateChannel}
+          onchange={handleChannelChange}
+          options={[
+            { value: "stable", label: "安定版" },
+            { value: "insider", label: "インサイダー版" },
+          ]}
+        />
         {#if availableUpdate}
           <button type="button" class="primary small" disabled={isUpdating} onclick={() => onupdate?.()}>
             <i>system_update_alt</i>

@@ -1,10 +1,10 @@
 name: デスクトップ版リリース
 
 on:
-  workflow_dispatch: # ←これがあることで、GitHub上で「Run workflow」ボタンを押したときだけ手動実行できる
+  workflow_dispatch:
     inputs:
       version_tag:
-        description: "リリースするバージョンタグ (例: v1.0.0)"
+        description: "リリースするバージョンタグ (例: v1.0.2 または v1.0.3-pre.1)"
         required: true
         type: string
   push:
@@ -58,6 +58,68 @@ jobs:
       - name: パッケージのインストール
         run: bun install
 
+      - name: リリース情報の生成
+        shell: bash
+        run: |
+          TAG_NAME="${{ inputs.version_tag || github.ref_name }}"
+          IS_PRE="false"
+          if [[ "$TAG_NAME" == *"-pre"* ]]; then
+            IS_PRE="true"
+          fi
+
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG_NAME}^" 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log --no-merges "${PREV_TAG}..${TAG_NAME}^{commit}" --pretty=format:"%h|%s" || true)
+          else
+            COMMITS=$(git log --no-merges -n 20 "${TAG_NAME}^{commit}" --pretty=format:"%h|%s" || true)
+          fi
+
+          BODY=$(bun -e '
+            const input = process.argv[1] || "";
+            const groups = { add: [], change: [], fix: [], remove: [], other: [] };
+            const rules = [
+              { key: "add", prefixes: ["add", "feat", "feature", "new"] },
+              { key: "change", prefixes: ["change", "update", "improve", "refactor", "perf", "style"] },
+              { key: "fix", prefixes: ["fix", "bugfix", "hotfix"] },
+              { key: "remove", prefixes: ["remove", "del", "delete", "clean"] },
+            ];
+            for (const line of input.split("\n").filter(Boolean)) {
+              const [hash, ...rest] = line.split("|");
+              const subj = rest.join("|").trim();
+              if (!subj || /^temp$/i.test(subj) || /^\d+\.\d+\.\d+(-pre\.\d+)?$/.test(subj)) continue;
+              const m = subj.match(/^([a-zA-Z]+)(?:\([^)]+\))?\s*[:：]\s*(.+)$/);
+              let key = "other";
+              let msg = subj;
+              if (m) {
+                const prefix = m[1].toLowerCase();
+                msg = m[2].trim();
+                const hit = rules.find((r) => r.prefixes.includes(prefix));
+                if (hit) key = hit.key;
+              }
+              groups[key].push(`- ${msg} (\`${hash}\`)`);
+            }
+            const out = ["Windows向けおよびLinux向けのリリースファイルです。", ""];
+            const titles = [
+              ["add", "### ✨ 追加"],
+              ["change", "### 🛠️ 変更・改善"],
+              ["fix", "### 🐛 修正"],
+              ["remove", "### 🗑️ 削除"],
+              ["other", "### 📝 その他"],
+            ];
+            for (const [k, t] of titles) {
+              if (groups[k].length > 0) out.push(t, ...groups[k], "");
+            }
+            console.log(out.join("\n").trim());
+          ' "$COMMITS")
+
+          {
+            echo "TAG_NAME=$TAG_NAME"
+            echo "IS_PRE=$IS_PRE"
+            echo "RELEASE_BODY<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - name: ビルドとリリース処理
         uses: tauri-apps/tauri-action@v0
         env:
@@ -65,9 +127,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: v__VERSION__
-          releaseName: "Machirun Driver v__VERSION__"
-          releaseBody: "Windows向けおよびLinux向けのリリースファイルです"
+          tagName: ${{ env.TAG_NAME }}
+          releaseName: "Machirun ${{ env.TAG_NAME }}"
+          releaseBody: ${{ env.RELEASE_BODY }}
           releaseDraft: false
-          prerelease: false
+          prerelease: ${{ env.IS_PRE == 'true' }}
           args: ${{ matrix.args }}

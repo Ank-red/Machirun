@@ -28,6 +28,7 @@ const EXTRA_IGNORE = [
   "package-lock.json",
   "Cargo.lock",
   "bundle-code.ts",
+  ".release-notes.md",
   OUTPUT_FILE,
 ];
 
