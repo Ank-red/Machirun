@@ -44,7 +44,7 @@ function nextVersion(current: string, mode: VersionMode): string {
   const [major, minor, patch] = current.split(".").map(Number);
 
   if (mode === "pre") {
-    return `${major}.${minor}.${patch + 1}-pre.1`;
+    return `${major}.${minor + 1}.${patch}-pre.1`;
   }
   if (mode === "major") {
     return `${major + 1}.0.0`;
@@ -71,7 +71,7 @@ async function runVersionUp(mode: VersionMode): Promise<void> {
   const pkg = await Bun.file(pkgPath).json();
   const oldVersion: string = pkg.version;
   const newVersion = nextVersion(oldVersion, mode);
-  const appTitle: string = pkg.appTitle || "Machirun";
+  const appTitle: string = `${pkg.appTitle} Driver` || "Machirun Driver";
   const pkgName: string = pkg.name || "machirun";
 
   console.log(`🚀 バージョンを ${oldVersion} -> ${newVersion} に更新します...`);
